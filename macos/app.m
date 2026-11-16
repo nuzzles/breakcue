@@ -37,9 +37,10 @@ extern void bc_shutdown(void);
          currentMinute:(uint16_t)currentMinute;
 @end
 
-@interface BCAppDelegate : NSObject <NSApplicationDelegate>
+@interface BCAppDelegate : NSObject <NSApplicationDelegate, NSMenuDelegate>
 @property (strong) NSStatusItem *statusItem;
-@property (strong) NSPopover *popover;
+@property (strong) NSMenu *menu;
+@property (assign) BOOL menuOpen;
 @property (strong) NSWindow *settingsWindow;
 @property (strong) NSTextField *trackingLabel;
 @property (strong) NSImageView *trackingIcon;
@@ -59,8 +60,6 @@ extern void bc_shutdown(void);
 @property (strong) NSButton *soundTestButton;
 @property (strong) NSSound *playingSound;
 @property (strong) NSButton *startupCheckbox;
-@property (strong) id localMouseMonitor;
-@property (strong) id globalMouseMonitor;
 @property (assign) bool eyeDue;
 @property (assign) bool standDue;
 @property (assign) bool standing;
@@ -207,44 +206,29 @@ static BOOL mediaKeepsDisplayAwake(void) {
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     (void)notification;
     self.statusItem = [NSStatusBar.systemStatusBar statusItemWithLength:NSVariableStatusItemLength];
-    self.statusItem.button.target = self;
-    self.statusItem.button.action = @selector(togglePopover:);
-    [self makePopover];
+    [self makeMenu];
     [self updateActivity];
-    [self installClickAwayMonitors];
     NSTimer *timer = [NSTimer timerWithTimeInterval:0.25 target:self selector:@selector(updateActivity) userInfo:nil repeats:YES];
     [[NSRunLoop mainRunLoop] addTimer:timer forMode:NSRunLoopCommonModes];
 }
 
 - (void)applicationWillTerminate:(NSNotification *)notification {
     (void)notification;
-    if (self.localMouseMonitor) [NSEvent removeMonitor:self.localMouseMonitor];
-    if (self.globalMouseMonitor) [NSEvent removeMonitor:self.globalMouseMonitor];
     bc_shutdown();
 }
 
-- (void)installClickAwayMonitors {
-    __weak typeof(self) weakSelf = self;
-    NSEventMask clicks = NSEventMaskLeftMouseDown | NSEventMaskRightMouseDown;
-    self.localMouseMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:clicks handler:^NSEvent *(NSEvent *event) {
-        BCAppDelegate *owner = weakSelf;
-        if (owner.popover.isShown && event.window != owner.popover.contentViewController.view.window
-            && event.window != owner.statusItem.button.window) {
-            [owner.popover performClose:nil];
-        }
-        return event;
-    }];
-    self.globalMouseMonitor = [NSEvent addGlobalMonitorForEventsMatchingMask:clicks handler:^(NSEvent *event) {
-        (void)event;
-        BCAppDelegate *owner = weakSelf;
-        if (owner.popover.isShown) [owner.popover performClose:nil];
-    }];
+- (void)menuWillOpen:(NSMenu *)menu {
+    (void)menu;
+    self.menuOpen = YES;
 }
 
-- (void)makePopover {
-    NSViewController *controller = [[NSViewController alloc] init];
+- (void)menuDidClose:(NSMenu *)menu {
+    (void)menu;
+    self.menuOpen = NO;
+}
+
+- (void)makeMenu {
     NSView *view = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 336, 360)];
-    controller.view = view;
 
     NSTextField *title = label(@"BreakCue", NSMakeRect(18, 327, 180, 23), YES);
     title.font = [NSFont boldSystemFontOfSize:15];
@@ -282,26 +266,17 @@ static BOOL mediaKeepsDisplayAwake(void) {
     [view addSubview:button(@"Settings…", NSMakeRect(18, 7, 100, 28), self, @selector(openSettings:), 0)];
     [view addSubview:button(@"Quit", NSMakeRect(250, 7, 72, 28), NSApp, @selector(terminate:), 0)];
 
-    self.popover = [[NSPopover alloc] init];
-    self.popover.contentViewController = controller;
-    self.popover.behavior = NSPopoverBehaviorTransient;
+    self.menu = [[NSMenu alloc] initWithTitle:@"BreakCue"];
+    self.menu.delegate = self;
+    NSMenuItem *content = [[NSMenuItem alloc] initWithTitle:@"" action:nil keyEquivalent:@""];
+    content.view = view;
+    [self.menu addItem:content];
+    self.statusItem.menu = self.menu;
 }
 
 - (void)updateActivity {
     double idle = CGEventSourceSecondsSinceLastEventType(kCGEventSourceStateCombinedSessionState, kCGAnyInputEventType);
     bc_tick(idle, screenReady(), mediaKeepsDisplayAwake());
-}
-
-- (void)togglePopover:(id)sender {
-    (void)sender;
-    if (self.popover.isShown) [self.popover performClose:nil];
-    else [self showPopover];
-}
-
-- (void)showPopover {
-    NSButton *anchor = self.statusItem.button;
-    [self.popover showRelativeToRect:anchor.bounds ofView:anchor preferredEdge:NSRectEdgeMinY];
-    [NSApp activateIgnoringOtherApps:YES];
 }
 
 - (void)performAction:(NSButton *)sender {
@@ -350,7 +325,7 @@ static BOOL mediaKeepsDisplayAwake(void) {
     self.standDismissButton.enabled = self.standDue;
     if (reminder != 0) {
         [self playSoundAtIndex:sound];
-        if (!self.popover.isShown) [self showPopover];
+        if (!self.menuOpen) [self.statusItem.button performClick:nil];
     }
 }
 
@@ -374,7 +349,7 @@ static BOOL mediaKeepsDisplayAwake(void) {
 
 - (void)openSettings:(id)sender {
     (void)sender;
-    [self.popover performClose:nil];
+    [self.menu cancelTracking];
     if (self.settingsWindow) {
         [self refreshSettingsValues];
         [self.settingsWindow makeKeyAndOrderFront:nil];
