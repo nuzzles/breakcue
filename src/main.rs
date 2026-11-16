@@ -258,13 +258,13 @@ impl Engine {
     fn action(&mut self, action: c_int) {
         let snooze = Duration::from_secs(self.config.snooze_minutes as u64 * 60);
         match action {
-            1 => {
+            1 if self.eye_due => {
                 // Eye: dismiss this cycle.
                 self.eye_due = false;
                 self.eye_active_seconds = 0;
                 self.eye_snoozed_until = None;
             }
-            2 => {
+            2 if self.eye_due => {
                 // Eye: snooze.
                 self.eye_due = false;
                 self.eye_snoozed_until = Some(Instant::now() + snooze);
@@ -509,5 +509,15 @@ mod tests {
         assert_eq!(day.standing_seconds, 3600);
         assert_eq!(day.active_seconds_by_minute.len(), 1440);
         assert!(day.eye_break_minutes.is_empty());
+    }
+
+    #[test]
+    fn eye_actions_do_nothing_before_an_alarm() {
+        let mut e = Engine::load();
+        e.eye_active_seconds = 45;
+        e.action(1);
+        e.action(2);
+        assert_eq!(e.eye_active_seconds, 45);
+        assert!(e.eye_snoozed_until.is_none());
     }
 }

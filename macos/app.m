@@ -34,7 +34,8 @@ extern void sd_shutdown(void);
 @property (strong) NSStatusItem *statusItem;
 @property (strong) NSPopover *popover;
 @property (strong) NSWindow *settingsWindow;
-@property (strong) NSTextField *stateLabel;
+@property (strong) NSTextField *trackingLabel;
+@property (strong) NSImageView *trackingIcon;
 @property (strong) NSTextField *eyeLabel;
 @property (strong) NSTextField *standLabel;
 @property (strong) NSTextField *dailyLabel;
@@ -49,6 +50,8 @@ extern void sd_shutdown(void);
 @property (strong) NSArray<NSTextField *> *settingsFields;
 @property (strong) NSButton *mediaCheckbox;
 @property (strong) NSButton *startupCheckbox;
+@property (strong) id localMouseMonitor;
+@property (strong) id globalMouseMonitor;
 @property (assign) bool eyeDue;
 @property (assign) bool standDue;
 @property (assign) bool standing;
@@ -184,12 +187,33 @@ static BOOL mediaKeepsDisplayAwake(void) {
     self.statusItem.button.action = @selector(togglePopover:);
     [self makePopover];
     [self updateActivity];
+    [self installClickAwayMonitors];
     [NSTimer scheduledTimerWithTimeInterval:5 target:self selector:@selector(updateActivity) userInfo:nil repeats:YES];
 }
 
 - (void)applicationWillTerminate:(NSNotification *)notification {
     (void)notification;
+    if (self.localMouseMonitor) [NSEvent removeMonitor:self.localMouseMonitor];
+    if (self.globalMouseMonitor) [NSEvent removeMonitor:self.globalMouseMonitor];
     sd_shutdown();
+}
+
+- (void)installClickAwayMonitors {
+    __weak typeof(self) weakSelf = self;
+    NSEventMask clicks = NSEventMaskLeftMouseDown | NSEventMaskRightMouseDown;
+    self.localMouseMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:clicks handler:^NSEvent *(NSEvent *event) {
+        SDAppDelegate *owner = weakSelf;
+        if (owner.popover.isShown && event.window != owner.popover.contentViewController.view.window
+            && event.window != owner.statusItem.button.window) {
+            [owner.popover performClose:nil];
+        }
+        return event;
+    }];
+    self.globalMouseMonitor = [NSEvent addGlobalMonitorForEventsMatchingMask:clicks handler:^(NSEvent *event) {
+        (void)event;
+        SDAppDelegate *owner = weakSelf;
+        if (owner.popover.isShown) [owner.popover performClose:nil];
+    }];
 }
 
 - (void)makePopover {
@@ -197,24 +221,36 @@ static BOOL mediaKeepsDisplayAwake(void) {
     NSView *view = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 336, 330)];
     controller.view = view;
 
-    [view addSubview:label(@"screen_doctor", NSMakeRect(18, 297, 300, 23), YES)];
-    self.stateLabel = label(@"Checking activity…", NSMakeRect(18, 274, 300, 19), NO);
-    [view addSubview:self.stateLabel];
-    self.eyeLabel = label(@"", NSMakeRect(18, 247, 300, 20), YES);
+    NSTextField *title = label(@"Screen Doctor", NSMakeRect(18, 297, 180, 23), YES);
+    title.font = [NSFont boldSystemFontOfSize:15];
+    [view addSubview:title];
+    self.trackingLabel = label(@"Idle", NSMakeRect(218, 298, 79, 20), NO);
+    self.trackingLabel.alignment = NSTextAlignmentRight;
+    NSFontDescriptor *italic = [[NSFont systemFontOfSize:12].fontDescriptor fontDescriptorWithSymbolicTraits:NSFontDescriptorTraitItalic];
+    self.trackingLabel.font = [NSFont fontWithDescriptor:italic size:12] ?: [NSFont systemFontOfSize:12];
+    self.trackingLabel.textColor = NSColor.secondaryLabelColor;
+    [view addSubview:self.trackingLabel];
+    self.trackingIcon = [[NSImageView alloc] initWithFrame:NSMakeRect(304, 300, 15, 15)];
+    [view addSubview:self.trackingIcon];
+    NSBox *separator = [[NSBox alloc] initWithFrame:NSMakeRect(18, 286, 304, 1)];
+    separator.boxType = NSBoxSeparator;
+    [view addSubview:separator];
+
+    self.eyeLabel = label(@"", NSMakeRect(18, 258, 300, 20), YES);
     [view addSubview:self.eyeLabel];
-    self.eyeStartButton = button(@"Start 20-second look", NSMakeRect(18, 216, 144, 28), self, @selector(performAction:), 3);
-    self.eyeSnoozeButton = button(@"Snooze", NSMakeRect(170, 216, 72, 28), self, @selector(performAction:), 2);
-    self.eyeDismissButton = button(@"Dismiss", NSMakeRect(246, 216, 76, 28), self, @selector(performAction:), 1);
+    self.eyeStartButton = button(@"Start 20-second look", NSMakeRect(18, 226, 144, 28), self, @selector(performAction:), 3);
+    self.eyeSnoozeButton = button(@"Snooze", NSMakeRect(170, 226, 72, 28), self, @selector(performAction:), 2);
+    self.eyeDismissButton = button(@"Dismiss", NSMakeRect(246, 226, 76, 28), self, @selector(performAction:), 1);
     for (NSButton *control in @[self.eyeStartButton, self.eyeSnoozeButton, self.eyeDismissButton]) [view addSubview:control];
 
-    self.standLabel = label(@"", NSMakeRect(18, 185, 300, 20), YES);
+    self.standLabel = label(@"", NSMakeRect(18, 195, 300, 20), YES);
     [view addSubview:self.standLabel];
-    self.dailyLabel = label(@"", NSMakeRect(18, 166, 300, 18), NO);
+    self.dailyLabel = label(@"", NSMakeRect(18, 176, 300, 18), NO);
     [view addSubview:self.dailyLabel];
-    self.standStartButton = button(@"Start standing", NSMakeRect(18, 137, 126, 28), self, @selector(performAction:), 5);
-    self.standStopButton = button(@"Stop standing", NSMakeRect(18, 137, 126, 28), self, @selector(performAction:), 6);
-    self.standSnoozeButton = button(@"Snooze", NSMakeRect(170, 137, 72, 28), self, @selector(performAction:), 7);
-    self.standDismissButton = button(@"Dismiss", NSMakeRect(246, 137, 76, 28), self, @selector(performAction:), 8);
+    self.standStartButton = button(@"Start standing", NSMakeRect(18, 144, 126, 28), self, @selector(performAction:), 5);
+    self.standStopButton = button(@"Stop standing", NSMakeRect(18, 144, 126, 28), self, @selector(performAction:), 6);
+    self.standSnoozeButton = button(@"Snooze", NSMakeRect(170, 144, 72, 28), self, @selector(performAction:), 7);
+    self.standDismissButton = button(@"Dismiss", NSMakeRect(246, 144, 76, 28), self, @selector(performAction:), 8);
     for (NSButton *control in @[self.standStartButton, self.standStopButton, self.standSnoozeButton, self.standDismissButton]) [view addSubview:control];
 
     self.timeline = [[SDTimelineView alloc] initWithFrame:NSMakeRect(8, 39, 320, 93)];
@@ -268,7 +304,11 @@ static BOOL mediaKeepsDisplayAwake(void) {
     image.template = YES;
     anchor.image = image;
     anchor.toolTip = active ? (media ? @"screen_doctor: tracking possible media playback" : @"screen_doctor: tracking activity") : @"screen_doctor: paused while away or screen locked";
-    self.stateLabel.stringValue = active ? (media ? @"Tracking · input or media playback" : @"Tracking · recent input") : @"Paused · away, locked, or display asleep";
+    self.trackingLabel.stringValue = active ? @"Tracking" : @"Idle";
+    NSImage *trackingImage = [NSImage imageWithSystemSymbolName:active ? @"eye.fill" : @"pause.circle"
+                                              accessibilityDescription:active ? @"Tracking" : @"Idle"];
+    trackingImage.template = YES;
+    self.trackingIcon.image = trackingImage;
     self.eyeLabel.stringValue = eye;
     self.standLabel.stringValue = stand;
     self.dailyLabel.stringValue = daily;
@@ -277,8 +317,8 @@ static BOOL mediaKeepsDisplayAwake(void) {
     self.standDue = [stand isEqualToString:@"Time to stand"];
     self.standing = standing;
     self.eyeStartButton.hidden = !self.eyeDue;
-    self.eyeSnoozeButton.hidden = !self.eyeDue;
-    self.eyeDismissButton.hidden = !self.eyeDue;
+    self.eyeSnoozeButton.enabled = self.eyeDue;
+    self.eyeDismissButton.enabled = self.eyeDue;
     self.standStartButton.hidden = standing;
     self.standStopButton.hidden = !standing;
     self.standSnoozeButton.hidden = !self.standDue;
@@ -288,6 +328,7 @@ static BOOL mediaKeepsDisplayAwake(void) {
 
 - (void)openSettings:(id)sender {
     (void)sender;
+    [self.popover performClose:nil];
     if (self.settingsWindow) {
         [self.settingsWindow makeKeyAndOrderFront:nil];
         [NSApp activateIgnoringOtherApps:YES];
