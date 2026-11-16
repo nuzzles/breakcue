@@ -103,14 +103,18 @@ static BCAppDelegate *delegate;
     [caret lineToPoint:NSMakePoint(NSMidX(self.bounds), NSMaxY(self.bounds))];
     [caret lineToPoint:NSMakePoint(NSMaxX(self.bounds), 0)];
     [caret closePath];
-    [NSColor.windowBackgroundColor setFill];
+    BOOL dark = [[self.effectiveAppearance bestMatchFromAppearancesWithNames:@[NSAppearanceNameDarkAqua, NSAppearanceNameAqua]]
+        isEqualToString:NSAppearanceNameDarkAqua];
+    NSColor *background = dark ? [NSColor colorWithWhite:0.11 alpha:1] : NSColor.windowBackgroundColor;
+    [background setFill];
     [caret fill];
     NSBezierPath *outline = [NSBezierPath bezierPath];
     [outline moveToPoint:NSMakePoint(0.5, 0)];
     [outline lineToPoint:NSMakePoint(NSMidX(self.bounds), NSMaxY(self.bounds) - 0.5)];
     [outline lineToPoint:NSMakePoint(NSMaxX(self.bounds) - 0.5, 0)];
-    outline.lineWidth = 1;
-    [NSColor.separatorColor setStroke];
+    outline.lineWidth = 1.25;
+    NSColor *border = dark ? [NSColor colorWithWhite:0.47 alpha:1] : [NSColor colorWithWhite:0.68 alpha:1];
+    [border setStroke];
     [outline stroke];
 }
 
@@ -290,9 +294,11 @@ static BOOL mediaKeepsDisplayAwake(void) {
     NSRect screen = anchor.window.screen.frame;
     CGFloat left = NSMidX(anchorOnScreen) - NSWidth(frame) / 2;
     left = MAX(NSMinX(screen) + 8, MIN(left, NSMaxX(screen) - NSWidth(frame) - 8));
+    frame.origin.x = left;
+    frame.origin.y = NSMinY(anchorOnScreen) - NSHeight(frame) - 7;
     self.menuPositioned = YES;
-    [menuWindow setFrameOrigin:NSMakePoint(left, NSMinY(frame))];
-    CGFloat pointerX = NSMidX(anchorOnScreen) - 11;
+    [menuWindow setFrameOrigin:frame.origin];
+    CGFloat pointerX = NSMidX(frame) - 11;
     if (!self.caretWindow) {
         self.caretWindow = [[NSPanel alloc] initWithContentRect:NSMakeRect(pointerX, NSMaxY(frame) - 1, 22, 11)
                                                      styleMask:NSWindowStyleMaskBorderless | NSWindowStyleMaskNonactivatingPanel
