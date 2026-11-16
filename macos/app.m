@@ -53,6 +53,7 @@ extern void sd_shutdown(void);
 @property (strong) NSButton *standDismissButton;
 @property (strong) NSArray<NSTextField *> *settingsFields;
 @property (strong) NSTextField *settingsPathLabel;
+@property (strong) NSButton *settingsOpenButton;
 @property (strong) NSButton *mediaCheckbox;
 @property (strong) NSButton *startupCheckbox;
 @property (strong) id localMouseMonitor;
@@ -199,7 +200,7 @@ static BOOL mediaKeepsDisplayAwake(void) {
     [self makePopover];
     [self updateActivity];
     [self installClickAwayMonitors];
-    [NSTimer scheduledTimerWithTimeInterval:5 target:self selector:@selector(updateActivity) userInfo:nil repeats:YES];
+    [NSTimer scheduledTimerWithTimeInterval:1 target:self selector:@selector(updateActivity) userInfo:nil repeats:YES];
 }
 
 - (void)applicationWillTerminate:(NSNotification *)notification {
@@ -343,45 +344,55 @@ static BOOL mediaKeepsDisplayAwake(void) {
     (void)sender;
     [self.popover performClose:nil];
     if (self.settingsWindow) {
+        [self refreshSettingsValues];
         [self.settingsWindow makeKeyAndOrderFront:nil];
         [NSApp activateIgnoringOtherApps:YES];
         return;
     }
-    NSWindow *window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 420, 430)
+    NSWindow *window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 480, 500)
                                                      styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
                                                        backing:NSBackingStoreBuffered defer:NO];
-    window.title = @"screen_doctor Settings";
+    window.title = @"Screen Doctor Settings";
     window.releasedWhenClosed = NO;
     NSView *view = window.contentView;
+    [view addSubview:label(@"Reminders", NSMakeRect(24, 465, 432, 20), YES)];
+    [view addSubview:label(@"Activity & startup", NSMakeRect(24, 228, 432, 20), YES)];
+    [view addSubview:label(@"Settings file", NSMakeRect(24, 128, 432, 20), YES)];
+    for (NSNumber *position in @[@454, @219, @119, @48]) {
+        NSBox *separator = [[NSBox alloc] initWithFrame:NSMakeRect(24, position.doubleValue, 432, 1)];
+        separator.boxType = NSBoxSeparator;
+        [view addSubview:separator];
+    }
     SDConfig config = sd_config();
     NSArray<NSString *> *names = @[@"Eye interval (active minutes)", @"Stand interval (active minutes)", @"Daily standing goal (minutes)", @"Snooze (minutes)", @"Away after no input (seconds)"];
     uint32_t values[] = {config.eye_minutes, config.stand_minutes, config.daily_stand_minutes, config.snooze_minutes, config.idle_seconds};
     NSMutableArray<NSTextField *> *fields = [NSMutableArray array];
     for (int i = 0; i < 5; i++) {
-        CGFloat y = 382 - 43 * i;
-        [view addSubview:label(names[i], NSMakeRect(18, y, 277, 20), NO)];
-        NSTextField *field = [[NSTextField alloc] initWithFrame:NSMakeRect(304, y - 2, 90, 24)];
+        CGFloat y = 417 - 38 * i;
+        [view addSubview:label(names[i], NSMakeRect(24, y, 330, 20), NO)];
+        NSTextField *field = [[NSTextField alloc] initWithFrame:NSMakeRect(370, y - 2, 86, 24)];
         field.integerValue = values[i];
         [view addSubview:field];
         [fields addObject:field];
     }
     self.settingsFields = fields;
     self.mediaCheckbox = [NSButton checkboxWithTitle:@"Count display-awake media playback as activity" target:nil action:nil];
-    self.mediaCheckbox.frame = NSMakeRect(18, 160, 380, 22);
+    self.mediaCheckbox.frame = NSMakeRect(24, 188, 432, 22);
     self.mediaCheckbox.state = config.count_media ? NSControlStateValueOn : NSControlStateValueOff;
     [view addSubview:self.mediaCheckbox];
     self.startupCheckbox = [NSButton checkboxWithTitle:@"Launch at login" target:nil action:nil];
-    self.startupCheckbox.frame = NSMakeRect(18, 131, 380, 22);
+    self.startupCheckbox.frame = NSMakeRect(24, 160, 432, 22);
     self.startupCheckbox.state = SMAppService.mainAppService.status == SMAppServiceStatusEnabled ? NSControlStateValueOn : NSControlStateValueOff;
     [view addSubview:self.startupCheckbox];
-    [view addSubview:label(@"Settings file", NSMakeRect(18, 104, 380, 19), YES)];
-    self.settingsPathLabel = label(@"", NSMakeRect(18, 83, 380, 19), NO);
+    self.settingsPathLabel = label(@"", NSMakeRect(24, 93, 432, 19), NO);
     self.settingsPathLabel.textColor = NSColor.secondaryLabelColor;
     [view addSubview:self.settingsPathLabel];
-    [view addSubview:button(@"Choose…", NSMakeRect(18, 46, 100, 28), self, @selector(chooseSettingsFile:), 0)];
-    [view addSubview:button(@"Use Default", NSMakeRect(124, 46, 110, 28), self, @selector(useDefaultSettingsFile:), 0)];
+    [view addSubview:button(@"Choose…", NSMakeRect(24, 57, 100, 28), self, @selector(chooseSettingsFile:), 0)];
+    self.settingsOpenButton = button(@"Open File", NSMakeRect(132, 57, 88, 28), self, @selector(openSettingsFile:), 0);
+    [view addSubview:self.settingsOpenButton];
+    [view addSubview:button(@"Use Default", NSMakeRect(228, 57, 112, 28), self, @selector(useDefaultSettingsFile:), 0)];
     [self refreshSettingsPath];
-    [view addSubview:button(@"Save", NSMakeRect(304, 12, 90, 29), self, @selector(saveSettings:), 0)];
+    [view addSubview:button(@"Save", NSMakeRect(366, 12, 90, 29), self, @selector(saveSettings:), 0)];
     [window center];
     self.settingsWindow = window;
     [window makeKeyAndOrderFront:nil];
@@ -392,7 +403,36 @@ static BOOL mediaKeepsDisplayAwake(void) {
     char *path = sd_settings_path();
     self.settingsPathLabel.stringValue = path ? [NSString stringWithUTF8String:path] : @"";
     self.settingsPathLabel.toolTip = self.settingsPathLabel.stringValue;
+    self.settingsOpenButton.enabled = path && [[NSFileManager defaultManager] isReadableFileAtPath:self.settingsPathLabel.stringValue];
     sd_free_string(path);
+}
+
+- (void)openSettingsFile:(id)sender {
+    (void)sender;
+    char *rawPath = sd_settings_path();
+    NSString *path = rawPath ? [NSString stringWithUTF8String:rawPath] : nil;
+    sd_free_string(rawPath);
+    NSWorkspace *workspace = NSWorkspace.sharedWorkspace;
+    NSURL *fileURL = path ? [NSURL fileURLWithPath:path] : nil;
+    NSURL *editorURL = fileURL ? [workspace URLForApplicationToOpenURL:fileURL] : nil;
+    if (!editorURL) editorURL = [workspace URLForApplicationWithBundleIdentifier:@"com.apple.TextEdit"];
+    if (fileURL && editorURL) {
+        [workspace openURLs:@[fileURL] withApplicationAtURL:editorURL
+             configuration:[NSWorkspaceOpenConfiguration configuration]
+         completionHandler:^(NSRunningApplication *application, NSError *error) {
+            (void)application;
+            if (error) dispatch_async(dispatch_get_main_queue(), ^{ [self showSettingsOpenError:path]; });
+        }];
+        return;
+    }
+    [self showSettingsOpenError:path];
+}
+
+- (void)showSettingsOpenError:(NSString *)path {
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = @"Could not open settings file";
+    alert.informativeText = path ?: @"No settings file is selected.";
+    [alert beginSheetModalForWindow:self.settingsWindow completionHandler:nil];
 }
 
 - (void)showInvalidSettingsFile {
@@ -407,6 +447,7 @@ static BOOL mediaKeepsDisplayAwake(void) {
     uint32_t values[] = {config.eye_minutes, config.stand_minutes, config.daily_stand_minutes, config.snooze_minutes, config.idle_seconds};
     for (int i = 0; i < 5; i++) self.settingsFields[i].integerValue = values[i];
     self.mediaCheckbox.state = config.count_media ? NSControlStateValueOn : NSControlStateValueOff;
+    self.startupCheckbox.state = SMAppService.mainAppService.status == SMAppServiceStatusEnabled ? NSControlStateValueOn : NSControlStateValueOff;
     [self refreshSettingsPath];
 }
 
