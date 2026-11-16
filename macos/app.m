@@ -157,13 +157,13 @@ static BCAppDelegate *delegate;
     [[NSColor.systemPinkColor colorWithAlphaComponent:0.95] setFill];
     for (NSUInteger index = 0; index < self.eyeBreaks.length / sizeof(uint16_t); index++) {
         CGFloat x = plotX + plotWidth * eyeMinutes[index] / 1440.0;
-        NSRectFill(NSMakeRect(x - 1, 14, 2, 14));
+        NSRectFill(NSMakeRect(x - 1.5, 24, 3, 5));
     }
     const uint16_t *resetMinutes = self.eyeResets.bytes;
     [NSColor.systemRedColor setFill];
     for (NSUInteger index = 0; index < self.eyeResets.length / sizeof(uint16_t); index++) {
         CGFloat x = plotX + plotWidth * resetMinutes[index] / 1440.0;
-        NSRectFill(NSMakeRect(x - 1.5, 14, 3, 14));
+        NSRectFill(NSMakeRect(x - 1.5, 14, 3, 10));
     }
 }
 @end
