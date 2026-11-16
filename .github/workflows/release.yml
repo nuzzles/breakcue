@@ -29,7 +29,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tag="main-${GITHUB_RUN_NUMBER}"
+          version="$(awk -F '"' '/^version = "/ { print $2; exit }' Cargo.toml)"
+          test -n "$version"
+          tag="${version}-${GITHUB_SHA:0:7}"
           gh release create "$tag" dist/BreakCue.dmg \
             --target "$GITHUB_SHA" \
             --title "BreakCue $tag" \
