@@ -1,4 +1,4 @@
-use chrono::{Local, NaiveDate};
+use chrono::{Local, NaiveDate, Timelike};
 use serde::{Deserialize, Serialize};
 use std::{
     ffi::CString,
@@ -61,6 +61,46 @@ impl Config {
 struct DayRecord {
     date: NaiveDate,
     standing_seconds: u64,
+    #[serde(default)]
+    active_seconds_by_minute: Vec<u8>,
+    #[serde(default)]
+    standing_seconds_by_minute: Vec<u8>,
+    #[serde(default)]
+    eye_break_minutes: Vec<u16>,
+}
+
+impl DayRecord {
+    fn new(date: NaiveDate) -> Self {
+        Self {
+            date,
+            standing_seconds: 0,
+            active_seconds_by_minute: vec![0; 1440],
+            standing_seconds_by_minute: vec![0; 1440],
+            eye_break_minutes: Vec::new(),
+        }
+    }
+
+    fn normalize(&mut self) {
+        self.active_seconds_by_minute.resize(1440, 0);
+        self.active_seconds_by_minute.truncate(1440);
+        self.standing_seconds_by_minute.resize(1440, 0);
+        self.standing_seconds_by_minute.truncate(1440);
+        self.eye_break_minutes.retain(|minute| *minute < 1440);
+    }
+}
+
+// Credit only the sampled interval, split at minute boundaries. A minute is
+// displayed when at least one second of that activity was observed in it.
+fn credit_minutes(buckets: &mut [u8], end_second: u32, seconds: u64) {
+    let mut cursor = end_second as u64;
+    let start = cursor.saturating_sub(seconds);
+    while cursor > start {
+        let minute = ((cursor - 1) / 60) as usize;
+        let segment_start = start.max(minute as u64 * 60);
+        let amount = (cursor - segment_start) as u8;
+        buckets[minute] = buckets[minute].saturating_add(amount).min(60);
+        cursor = segment_start;
+    }
 }
 
 struct Engine {
@@ -86,18 +126,13 @@ impl Engine {
     fn load() -> Self {
         let config = load_json("config.json").unwrap_or_default();
         let today = Local::now().date_naive();
-        let day: DayRecord = load_json("day.json").unwrap_or(DayRecord {
-            date: today,
-            standing_seconds: 0,
-        });
-        let day = if day.date == today {
+        let day: DayRecord = load_json("day.json").unwrap_or_else(|| DayRecord::new(today));
+        let mut day = if day.date == today {
             day
         } else {
-            DayRecord {
-                date: today,
-                standing_seconds: 0,
-            }
+            DayRecord::new(today)
         };
+        day.normalize();
         let now = Instant::now();
         Self {
             config,
@@ -124,12 +159,11 @@ impl Engine {
         // A sleep/wake gap must not become hours of credited activity or standing time.
         let elapsed = now.duration_since(self.last_tick).as_secs().min(10);
         self.last_tick = now;
-        let today = Local::now().date_naive();
+        let local_now = Local::now();
+        let today = local_now.date_naive();
+        let second_of_day = local_now.time().num_seconds_from_midnight();
         if self.day.date != today {
-            self.day = DayRecord {
-                date: today,
-                standing_seconds: 0,
-            };
+            self.day = DayRecord::new(today);
             self.standing_seconds = 0;
             self.standing = false;
             self.stand_active_seconds = 0;
@@ -139,6 +173,7 @@ impl Engine {
             self.save_day();
         }
 
+        let break_was_in_progress = self.eye_break_start.is_some();
         if self
             .eye_break_start
             .is_some_and(|start| start.elapsed().as_secs() >= 20)
@@ -159,12 +194,24 @@ impl Engine {
             let credited = elapsed.min(30 * 60 - self.standing_seconds);
             self.day.standing_seconds += credited;
             self.standing_seconds += credited;
+            credit_minutes(
+                &mut self.day.standing_seconds_by_minute,
+                second_of_day,
+                credited,
+            );
             if self.standing_seconds >= 30 * 60 {
                 self.standing = false;
                 self.standing_seconds = 0;
             }
         }
-        if self.active && !self.standing {
+        if self.active && !break_was_in_progress {
+            credit_minutes(
+                &mut self.day.active_seconds_by_minute,
+                second_of_day,
+                elapsed,
+            );
+        }
+        if self.active && !self.standing && !break_was_in_progress {
             if self.eye_break_start.is_none() && !self.eye_due {
                 self.eye_active_seconds += elapsed;
             }
@@ -226,6 +273,8 @@ impl Engine {
                 // Begin a deliberate 20-second distant look.
                 self.eye_due = false;
                 self.eye_break_start = Some(Instant::now());
+                let minute = (Local::now().time().num_seconds_from_midnight() / 60) as u16;
+                self.day.eye_break_minutes.push(minute);
             }
             5 => {
                 // Start a self-reported standing session.
@@ -258,6 +307,9 @@ impl Engine {
     }
 
     fn save_day(&self) {
+        if cfg!(test) {
+            return;
+        }
         save_json("day.json", &self.day);
     }
 }
@@ -299,6 +351,11 @@ extern "C" {
         stand: *const c_char,
         daily: *const c_char,
         standing: bool,
+        active_minutes: *const u8,
+        standing_minutes: *const u8,
+        eye_break_minutes: *const u16,
+        eye_break_count: usize,
+        current_minute: u16,
     );
 }
 
@@ -342,6 +399,11 @@ fn present(e: &Engine, reminder: u8) {
             stand.as_ptr(),
             daily.as_ptr(),
             e.standing,
+            e.day.active_seconds_by_minute.as_ptr(),
+            e.day.standing_seconds_by_minute.as_ptr(),
+            e.day.eye_break_minutes.as_ptr(),
+            e.day.eye_break_minutes.len(),
+            (Local::now().time().num_seconds_from_midnight() / 60) as u16,
         );
     }
 }
@@ -412,6 +474,7 @@ mod tests {
         let mut e = Engine::load();
         e.eye_due = true;
         e.action(3);
+        assert_eq!(e.day.eye_break_minutes.len(), 1);
         e.tick(0.0, true, false);
         assert!(e.eye_break_start.is_some());
         e.eye_break_start = Some(Instant::now() - Duration::from_secs(20));
@@ -428,5 +491,23 @@ mod tests {
         let before = e.day.standing_seconds;
         e.tick(600.0, false, false);
         assert_eq!(e.day.standing_seconds - before, 10);
+    }
+
+    #[test]
+    fn activity_is_split_at_minute_boundary() {
+        let mut minutes = vec![0; 1440];
+        credit_minutes(&mut minutes, 61, 5);
+        assert_eq!(minutes[0], 4);
+        assert_eq!(minutes[1], 1);
+    }
+
+    #[test]
+    fn old_daily_record_loads_with_empty_timeline() {
+        let mut day: DayRecord =
+            serde_json::from_str(r#"{"date":"2026-11-16","standing_seconds":3600}"#).unwrap();
+        day.normalize();
+        assert_eq!(day.standing_seconds, 3600);
+        assert_eq!(day.active_seconds_by_minute.len(), 1440);
+        assert!(day.eye_break_minutes.is_empty());
     }
 }
