@@ -442,7 +442,7 @@ fn present(e: &Engine, reminder: u8) {
         "Eye break due now".to_owned()
     } else {
         let left = (e.config.eye_minutes as u64 * 60).saturating_sub(e.eye_active_seconds);
-        format!("Eye break in {} min", left.div_ceil(60))
+        format!("Eye break in {}", countdown(left))
     };
     let stand = if e.standing {
         format!("Standing: {} min", e.standing_seconds / 60)
@@ -450,7 +450,7 @@ fn present(e: &Engine, reminder: u8) {
         "Time to stand".to_owned()
     } else {
         let left = (e.config.stand_minutes as u64 * 60).saturating_sub(e.stand_active_seconds);
-        format!("Stand in {} min", left.div_ceil(60))
+        format!("Stand in {}", countdown(left))
     };
     let daily = format!(
         "Standing today: {} / {} min",
@@ -476,6 +476,10 @@ fn present(e: &Engine, reminder: u8) {
             (Local::now().time().num_seconds_from_midnight() / 60) as u16,
         );
     }
+}
+
+fn countdown(seconds: u64) -> String {
+    format!("{:02}:{:02}", seconds / 60, seconds % 60)
 }
 
 #[no_mangle]
@@ -677,5 +681,12 @@ mod tests {
         assert_eq!(e.eye_active_seconds, 0);
         assert!(!e.eye_due);
         assert!(e.eye_snoozed_until.is_none());
+    }
+
+    #[test]
+    fn countdown_shows_minutes_and_seconds() {
+        assert_eq!(countdown(19 * 60 + 32), "19:32");
+        assert_eq!(countdown(120 * 60), "120:00");
+        assert_eq!(countdown(0), "00:00");
     }
 }
