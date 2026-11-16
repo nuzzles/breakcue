@@ -439,6 +439,8 @@ static BOOL mediaKeepsDisplayAwake(void) {
     [self.timeline updateActivity:activeMinutes standing:standingMinutes eyeBreaks:eyeBreakMinutes breakCount:eyeBreakCount eyeResets:eyeResetMinutes resetCount:eyeResetCount currentMinute:currentMinute];
     self.eyeDue = [eye isEqualToString:@"Eye break in 0:00"];
     self.standDue = [stand isEqualToString:@"Stand in 0:00"];
+    anchor.contentTintColor = (self.eyeDue || self.standDue) ? NSColor.systemRedColor : nil;
+    anchor.toolTip = self.eyeDue || self.standDue ? @"BreakCue reminder needs your response" : nil;
     self.standing = standing;
     self.eyeLabel.textColor = self.eyeDue ? NSColor.systemRedColor : NSColor.labelColor;
     self.standLabel.textColor = self.standDue ? NSColor.systemRedColor : NSColor.labelColor;
@@ -448,8 +450,8 @@ static BOOL mediaKeepsDisplayAwake(void) {
     self.standSnoozeButton.enabled = self.standDue;
     self.standDismissButton.enabled = self.standDue;
     if (reminder != 0) {
-        [self playSoundAtIndex:sound];
         if (!self.menuOpen) {
+            [self playSoundAtIndex:sound];
             self.openingReminder = YES;
             self.reminderLocation = NSEvent.mouseLocation;
             [self.statusItem.button performClick:nil];

@@ -145,8 +145,12 @@ struct Engine {
     standing_seconds: u64,
     standing: bool,
     active: bool,
-    shown_reminder: u8,
+    last_alert_at: Option<Instant>,
+    eye_alert_at: Option<Instant>,
+    stand_alert_at: Option<Instant>,
 }
+
+const REMINDER_REPEAT: Duration = Duration::from_secs(60);
 
 impl Engine {
     fn load() -> Self {
@@ -192,7 +196,9 @@ impl Engine {
             standing_seconds: 0,
             standing: false,
             active: false,
-            shown_reminder: 0,
+            last_alert_at: None,
+            eye_alert_at: None,
+            stand_alert_at: None,
         }
     }
 
@@ -212,7 +218,7 @@ impl Engine {
             self.stand_active_seconds = 0;
             self.stand_due = false;
             self.stand_snoozed_until = None;
-            self.shown_reminder = 0;
+            self.stand_alert_at = None;
             self.save_day();
         }
 
@@ -282,22 +288,53 @@ impl Engine {
             self.save_day();
             self.last_save = now;
         }
-        let reminder = if self.active && self.eye_due && self.eye_break_start.is_none() {
-            1
-        } else if self.active && self.stand_due && self.eye_break_start.is_none() {
-            2
-        } else {
-            0
-        };
-        if reminder != 0 && self.shown_reminder != reminder {
-            self.shown_reminder = reminder;
-            reminder
-        } else {
-            0
+        self.next_reminder(now)
+    }
+
+    fn next_reminder(&mut self, now: Instant) -> u8 {
+        if !self.eye_due {
+            self.eye_alert_at = None;
         }
+        if !self.stand_due {
+            self.stand_alert_at = None;
+        }
+        if !self.active || self.eye_break_start.is_some() {
+            return 0;
+        }
+        if self
+            .last_alert_at
+            .is_some_and(|last| now.duration_since(last) < REMINDER_REPEAT)
+        {
+            return 0;
+        }
+        let eye_ready = self.eye_due
+            && self
+                .eye_alert_at
+                .is_none_or(|last| now.duration_since(last) >= REMINDER_REPEAT);
+        let stand_ready = self.stand_due
+            && self
+                .stand_alert_at
+                .is_none_or(|last| now.duration_since(last) >= REMINDER_REPEAT);
+        let reminder = match (eye_ready, stand_ready) {
+            (true, true) if self.stand_alert_at < self.eye_alert_at => 2,
+            (true, _) => 1,
+            (_, true) => 2,
+            _ => 0,
+        };
+        if reminder != 0 {
+            self.last_alert_at = Some(now);
+            if reminder == 1 {
+                self.eye_alert_at = Some(now);
+            } else {
+                self.stand_alert_at = Some(now);
+            }
+        }
+        reminder
     }
 
     fn action(&mut self, action: c_int) {
+        let was_eye_due = self.eye_due;
+        let was_stand_due = self.stand_due;
         let snooze = Duration::from_secs(self.config.snooze_minutes as u64 * 60);
         match action {
             1 if self.eye_due => {
@@ -360,7 +397,16 @@ impl Engine {
             }
             _ => {}
         }
-        self.shown_reminder = 0;
+        if !self.eye_due {
+            self.eye_alert_at = None;
+        }
+        if !self.stand_due {
+            self.stand_alert_at = None;
+        }
+        if (was_eye_due && !self.eye_due) || (was_stand_due && !self.stand_due) {
+            // Another due reminder can be presented as soon as this one is handled.
+            self.last_alert_at = None;
+        }
     }
 
     fn save_day(&self) {
@@ -860,6 +906,41 @@ mod tests {
         e.tick(0.0, true, false);
         assert!(e.eye_due);
         assert_eq!(e.day.eye_break_minutes.len(), breaks);
+    }
+
+    #[test]
+    fn due_reminder_repeats_until_an_action() {
+        let mut e = Engine::load();
+        e.active = true;
+        e.eye_due = true;
+        let now = Instant::now();
+        assert_eq!(e.next_reminder(now), 1);
+        // Closing the menu does not call an action or clear the due state.
+        assert_eq!(
+            e.next_reminder(now + REMINDER_REPEAT - Duration::from_secs(1)),
+            0
+        );
+        assert_eq!(e.next_reminder(now + REMINDER_REPEAT), 1);
+        e.action(2);
+        assert_eq!(e.next_reminder(now + REMINDER_REPEAT * 2), 0);
+    }
+
+    #[test]
+    fn simultaneous_reminders_take_turns_and_an_action_advances_the_other() {
+        let mut e = Engine::load();
+        e.active = true;
+        e.eye_due = true;
+        e.stand_due = true;
+        let now = Instant::now();
+        assert_eq!(e.next_reminder(now), 1);
+        assert_eq!(e.next_reminder(now + Duration::from_secs(1)), 0);
+        assert_eq!(e.next_reminder(now + REMINDER_REPEAT), 2);
+        assert_eq!(e.next_reminder(now + REMINDER_REPEAT * 2), 1);
+        e.action(1);
+        assert_eq!(
+            e.next_reminder(now + REMINDER_REPEAT * 2 + Duration::from_secs(1)),
+            2
+        );
     }
 
     #[test]
