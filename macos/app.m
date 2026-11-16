@@ -37,10 +37,22 @@ extern void bc_shutdown(void);
          currentMinute:(uint16_t)currentMinute;
 @end
 
+@class BCAppDelegate;
+
+@interface BCMenuContentView : NSView
+@property (weak) BCAppDelegate *appDelegate;
+@end
+
+@interface BCCaretView : NSView
+@end
+
 @interface BCAppDelegate : NSObject <NSApplicationDelegate, NSMenuDelegate>
 @property (strong) NSStatusItem *statusItem;
 @property (strong) NSMenu *menu;
 @property (assign) BOOL menuOpen;
+@property (assign) BOOL menuPositioned;
+@property (strong) NSView *menuContent;
+@property (strong) NSPanel *caretWindow;
 @property (strong) NSWindow *settingsWindow;
 @property (strong) NSTextField *trackingLabel;
 @property (strong) NSImageView *trackingIcon;
@@ -63,9 +75,46 @@ extern void bc_shutdown(void);
 @property (assign) bool eyeDue;
 @property (assign) bool standDue;
 @property (assign) bool standing;
+- (void)centerMenuBelowStatusItem;
 @end
 
 static BCAppDelegate *delegate;
+
+@implementation BCMenuContentView
+
+- (void)viewDidMoveToWindow {
+    [super viewDidMoveToWindow];
+    [self.appDelegate centerMenuBelowStatusItem];
+}
+
+- (void)viewWillDraw {
+    [super viewWillDraw];
+    [self.appDelegate centerMenuBelowStatusItem];
+}
+
+@end
+
+@implementation BCCaretView
+
+- (void)drawRect:(NSRect)dirtyRect {
+    (void)dirtyRect;
+    NSBezierPath *caret = [NSBezierPath bezierPath];
+    [caret moveToPoint:NSMakePoint(0, 0)];
+    [caret lineToPoint:NSMakePoint(NSMidX(self.bounds), NSMaxY(self.bounds))];
+    [caret lineToPoint:NSMakePoint(NSMaxX(self.bounds), 0)];
+    [caret closePath];
+    [NSColor.windowBackgroundColor setFill];
+    [caret fill];
+    NSBezierPath *outline = [NSBezierPath bezierPath];
+    [outline moveToPoint:NSMakePoint(0.5, 0)];
+    [outline lineToPoint:NSMakePoint(NSMidX(self.bounds), NSMaxY(self.bounds) - 0.5)];
+    [outline lineToPoint:NSMakePoint(NSMaxX(self.bounds) - 0.5, 0)];
+    outline.lineWidth = 1;
+    [NSColor.separatorColor setStroke];
+    [outline stroke];
+}
+
+@end
 
 @implementation BCTimelineView
 
@@ -220,15 +269,49 @@ static BOOL mediaKeepsDisplayAwake(void) {
 - (void)menuWillOpen:(NSMenu *)menu {
     (void)menu;
     self.menuOpen = YES;
+    self.menuPositioned = NO;
+    [self centerMenuBelowStatusItem];
 }
 
 - (void)menuDidClose:(NSMenu *)menu {
     (void)menu;
     self.menuOpen = NO;
+    self.menuPositioned = NO;
+    [self.caretWindow orderOut:nil];
+}
+
+- (void)centerMenuBelowStatusItem {
+    NSButton *anchor = self.statusItem.button;
+    NSWindow *menuWindow = self.menuContent.window;
+    if (!self.menuOpen || self.menuPositioned || !anchor.window || !menuWindow) return;
+    NSRect anchorInWindow = [anchor convertRect:anchor.bounds toView:nil];
+    NSRect anchorOnScreen = [anchor.window convertRectToScreen:anchorInWindow];
+    NSRect frame = menuWindow.frame;
+    NSRect screen = anchor.window.screen.frame;
+    CGFloat left = NSMidX(anchorOnScreen) - NSWidth(frame) / 2;
+    left = MAX(NSMinX(screen) + 8, MIN(left, NSMaxX(screen) - NSWidth(frame) - 8));
+    self.menuPositioned = YES;
+    [menuWindow setFrameOrigin:NSMakePoint(left, NSMinY(frame))];
+    CGFloat pointerX = NSMidX(anchorOnScreen) - 11;
+    if (!self.caretWindow) {
+        self.caretWindow = [[NSPanel alloc] initWithContentRect:NSMakeRect(pointerX, NSMaxY(frame) - 1, 22, 11)
+                                                     styleMask:NSWindowStyleMaskBorderless | NSWindowStyleMaskNonactivatingPanel
+                                                       backing:NSBackingStoreBuffered defer:NO];
+        self.caretWindow.opaque = NO;
+        self.caretWindow.backgroundColor = NSColor.clearColor;
+        self.caretWindow.hasShadow = NO;
+        self.caretWindow.ignoresMouseEvents = YES;
+        self.caretWindow.level = NSPopUpMenuWindowLevel + 1;
+        self.caretWindow.collectionBehavior = NSWindowCollectionBehaviorCanJoinAllSpaces | NSWindowCollectionBehaviorFullScreenAuxiliary;
+        self.caretWindow.contentView = [[BCCaretView alloc] initWithFrame:NSMakeRect(0, 0, 22, 11)];
+    }
+    [self.caretWindow setFrameOrigin:NSMakePoint(pointerX, NSMaxY(frame) - 1)];
+    [self.caretWindow orderFrontRegardless];
 }
 
 - (void)makeMenu {
-    NSView *view = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 336, 360)];
+    BCMenuContentView *view = [[BCMenuContentView alloc] initWithFrame:NSMakeRect(0, 0, 336, 360)];
+    view.appDelegate = self;
 
     NSTextField *title = label(@"BreakCue", NSMakeRect(18, 327, 180, 23), YES);
     title.font = [NSFont boldSystemFontOfSize:15];
@@ -269,6 +352,7 @@ static BOOL mediaKeepsDisplayAwake(void) {
     self.menu = [[NSMenu alloc] initWithTitle:@"BreakCue"];
     self.menu.delegate = self;
     NSMenuItem *content = [[NSMenuItem alloc] initWithTitle:@"" action:nil keyEquivalent:@""];
+    self.menuContent = view;
     content.view = view;
     [self.menu addItem:content];
     self.statusItem.menu = self.menu;
@@ -385,13 +469,13 @@ static BOOL mediaKeepsDisplayAwake(void) {
     }
     self.settingsFields = fields;
     [view addSubview:label(@"Reminder sound", NSMakeRect(24, 244, 188, 20), NO)];
-    self.soundPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(230, 238, 140, 28) pullsDown:NO];
+    self.soundPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(316, 238, 140, 28) pullsDown:NO];
     [self.soundPopup addItemsWithTitles:@[@"Off", @"Glass", @"Ping", @"Pop"]];
     [self.soundPopup selectItemAtIndex:MIN(config.sound, 3)];
     self.soundPopup.target = self;
     self.soundPopup.action = @selector(soundSelectionChanged:);
     [view addSubview:self.soundPopup];
-    self.soundTestButton = button(@"Play", NSMakeRect(380, 238, 76, 28), self, @selector(testReminderSound:), 0);
+    self.soundTestButton = button(@"Play", NSMakeRect(230, 238, 76, 28), self, @selector(testReminderSound:), 0);
     self.soundTestButton.enabled = config.sound != 0;
     [view addSubview:self.soundTestButton];
     self.startupCheckbox = [NSButton checkboxWithTitle:@"Launch at login" target:nil action:nil];
@@ -401,10 +485,10 @@ static BOOL mediaKeepsDisplayAwake(void) {
     self.settingsPathLabel = label(@"", NSMakeRect(24, 86, 432, 19), NO);
     self.settingsPathLabel.textColor = NSColor.secondaryLabelColor;
     [view addSubview:self.settingsPathLabel];
-    [view addSubview:button(@"Choose…", NSMakeRect(24, 50, 100, 28), self, @selector(chooseSettingsFile:), 0)];
-    self.settingsOpenButton = button(@"Open File", NSMakeRect(132, 50, 88, 28), self, @selector(openSettingsFile:), 0);
+    [view addSubview:button(@"Choose…", NSMakeRect(24, 50, 138, 28), self, @selector(chooseSettingsFile:), 0)];
+    self.settingsOpenButton = button(@"Open File", NSMakeRect(170, 50, 138, 28), self, @selector(openSettingsFile:), 0);
     [view addSubview:self.settingsOpenButton];
-    [view addSubview:button(@"Use Default", NSMakeRect(228, 50, 112, 28), self, @selector(useDefaultSettingsFile:), 0)];
+    [view addSubview:button(@"Use Default", NSMakeRect(316, 50, 140, 28), self, @selector(useDefaultSettingsFile:), 0)];
     [self refreshSettingsPath];
     [view addSubview:button(@"Save", NSMakeRect(366, 8, 90, 29), self, @selector(saveSettings:), 0)];
     [window center];
