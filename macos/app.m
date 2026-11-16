@@ -9,7 +9,7 @@ typedef struct {
     uint32_t daily_stand_minutes;
     uint32_t snooze_minutes;
     uint32_t idle_seconds;
-    bool count_media;
+    uint32_t sound;
 } BCConfig;
 
 extern void bc_tick(double idle_seconds, bool screen_ready, bool media_assertion);
@@ -25,12 +25,15 @@ extern void bc_shutdown(void);
 @property (strong) NSData *activity;
 @property (strong) NSData *standing;
 @property (strong) NSData *eyeBreaks;
+@property (strong) NSData *eyeResets;
 @property (strong) NSString *standingGoal;
 @property (assign) uint16_t currentMinute;
 - (void)updateActivity:(const uint8_t *)activity
               standing:(const uint8_t *)standing
              eyeBreaks:(const uint16_t *)eyeBreaks
-                 count:(NSUInteger)count
+            breakCount:(NSUInteger)breakCount
+             eyeResets:(const uint16_t *)eyeResets
+            resetCount:(NSUInteger)resetCount
          currentMinute:(uint16_t)currentMinute;
 @end
 
@@ -54,7 +57,9 @@ extern void bc_shutdown(void);
 @property (strong) NSArray<NSTextField *> *settingsFields;
 @property (strong) NSTextField *settingsPathLabel;
 @property (strong) NSButton *settingsOpenButton;
-@property (strong) NSButton *mediaCheckbox;
+@property (strong) NSPopUpButton *soundPopup;
+@property (strong) NSButton *soundTestButton;
+@property (strong) NSSound *playingSound;
 @property (strong) NSButton *startupCheckbox;
 @property (strong) id localMouseMonitor;
 @property (strong) id globalMouseMonitor;
@@ -70,11 +75,14 @@ static BCAppDelegate *delegate;
 - (void)updateActivity:(const uint8_t *)activity
               standing:(const uint8_t *)standing
              eyeBreaks:(const uint16_t *)eyeBreaks
-                 count:(NSUInteger)count
+            breakCount:(NSUInteger)breakCount
+             eyeResets:(const uint16_t *)eyeResets
+            resetCount:(NSUInteger)resetCount
          currentMinute:(uint16_t)currentMinute {
     self.activity = [NSData dataWithBytes:activity length:1440];
     self.standing = [NSData dataWithBytes:standing length:1440];
-    self.eyeBreaks = [NSData dataWithBytes:eyeBreaks length:count * sizeof(uint16_t)];
+    self.eyeBreaks = [NSData dataWithBytes:eyeBreaks length:breakCount * sizeof(uint16_t)];
+    self.eyeResets = [NSData dataWithBytes:eyeResets length:resetCount * sizeof(uint16_t)];
     self.currentMinute = currentMinute;
     [self setNeedsDisplay:YES];
 }
@@ -104,7 +112,7 @@ static BCAppDelegate *delegate;
 - (void)drawRect:(NSRect)dirtyRect {
     (void)dirtyRect;
     NSRect bounds = self.bounds;
-    CGFloat plotX = 77;
+    CGFloat plotX = 95;
     CGFloat plotWidth = bounds.size.width - plotX - 12;
     NSBezierPath *background = [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(bounds, 1, 1) xRadius:8 yRadius:8];
     [[NSColor.controlBackgroundColor colorWithAlphaComponent:0.48] setFill];
@@ -121,13 +129,13 @@ static BCAppDelegate *delegate;
                                    NSParagraphStyleAttributeName: rightAligned}];
     [self drawText:@"Screen" x:11 y:54 color:NSColor.labelColor font:small];
     [self drawText:@"Standing" x:11 y:35 color:NSColor.labelColor font:small];
-    [self drawText:@"Eye breaks" x:11 y:16 color:NSColor.labelColor font:small];
+    [self drawText:@"Breaks" x:11 y:16 color:NSColor.systemPinkColor font:small];
+    [self drawText:@"·" x:44 y:16 color:secondary font:small];
+    [self drawText:@"Resets" x:51 y:16 color:NSColor.systemRedColor font:small];
     [NSColor.systemTealColor setFill];
     NSRectFill(NSMakeRect(67, 57, 6, 6));
     [NSColor.systemOrangeColor setFill];
     NSRectFill(NSMakeRect(67, 38, 6, 6));
-    [NSColor.systemPinkColor setFill];
-    NSRectFill(NSMakeRect(67, 19, 6, 6));
 
     [[NSColor.separatorColor colorWithAlphaComponent:0.32] setFill];
     for (CGFloat y = 54; y >= 16; y -= 19) {
@@ -144,15 +152,21 @@ static BCAppDelegate *delegate;
 
     [self drawActivity:self.activity y:54 color:NSColor.systemTealColor plotX:plotX plotWidth:plotWidth];
     [self drawActivity:self.standing y:35 color:NSColor.systemOrangeColor plotX:plotX plotWidth:plotWidth];
+    CGFloat nowX = plotX + plotWidth * self.currentMinute / 1440.0;
+    [[NSColor.labelColor colorWithAlphaComponent:0.62] setFill];
+    NSRectFill(NSMakeRect(nowX, 14, 1, 51));
     const uint16_t *eyeMinutes = self.eyeBreaks.bytes;
     [[NSColor.systemPinkColor colorWithAlphaComponent:0.95] setFill];
     for (NSUInteger index = 0; index < self.eyeBreaks.length / sizeof(uint16_t); index++) {
         CGFloat x = plotX + plotWidth * eyeMinutes[index] / 1440.0;
         NSRectFill(NSMakeRect(x - 1, 14, 2, 14));
     }
-    CGFloat nowX = plotX + plotWidth * self.currentMinute / 1440.0;
-    [[NSColor.labelColor colorWithAlphaComponent:0.62] setFill];
-    NSRectFill(NSMakeRect(nowX, 14, 1, 51));
+    const uint16_t *resetMinutes = self.eyeResets.bytes;
+    [NSColor.systemRedColor setFill];
+    for (NSUInteger index = 0; index < self.eyeResets.length / sizeof(uint16_t); index++) {
+        CGFloat x = plotX + plotWidth * resetMinutes[index] / 1440.0;
+        NSRectFill(NSMakeRect(x - 1.5, 14, 3, 14));
+    }
 }
 @end
 
@@ -265,7 +279,7 @@ static BOOL mediaKeepsDisplayAwake(void) {
     for (NSButton *control in @[self.standStartButton, self.standStopButton, self.standSnoozeButton, self.standDismissButton]) [view addSubview:control];
 
     self.timeline = [[BCTimelineView alloc] initWithFrame:NSMakeRect(8, 48, 320, 93)];
-    self.timeline.accessibilityLabel = @"Today from 00:00 to 24:00: screen activity, standing, and eye breaks";
+    self.timeline.accessibilityLabel = @"Today from 00:00 to 24:00: screen activity, standing, pink eye breaks, and red eye timer resets";
     [view addSubview:self.timeline];
 
     [view addSubview:button(@"Settings…", NSMakeRect(18, 7, 100, 28), self, @selector(openSettings:), 0)];
@@ -298,8 +312,8 @@ static BOOL mediaKeepsDisplayAwake(void) {
 }
 
 - (void)presentActive:(BOOL)active
-               media:(BOOL)media
             reminder:(uint8_t)reminder
+               sound:(uint32_t)sound
                  eye:(NSString *)eye
                stand:(NSString *)stand
                daily:(NSString *)daily
@@ -308,8 +322,9 @@ static BOOL mediaKeepsDisplayAwake(void) {
      standingMinutes:(const uint8_t *)standingMinutes
      eyeBreakMinutes:(const uint16_t *)eyeBreakMinutes
        eyeBreakCount:(NSUInteger)eyeBreakCount
+     eyeResetMinutes:(const uint16_t *)eyeResetMinutes
+       eyeResetCount:(NSUInteger)eyeResetCount
        currentMinute:(uint16_t)currentMinute {
-    (void)media;
     NSButton *anchor = self.statusItem.button;
     NSString *symbol = active ? @"eye.fill" : @"eye.slash";
     NSImage *image = [NSImage imageWithSystemSymbolName:symbol accessibilityDescription:active ? @"BreakCue tracking" : @"BreakCue paused"];
@@ -324,8 +339,8 @@ static BOOL mediaKeepsDisplayAwake(void) {
     self.standLabel.stringValue = stand;
     self.timeline.standingGoal = [NSString stringWithFormat:@"STAND %@", [daily stringByReplacingOccurrencesOfString:@"Standing today: " withString:@""]];
     self.timeline.toolTip = daily;
-    self.timeline.accessibilityLabel = [NSString stringWithFormat:@"Today from 00:00 to 24:00: screen activity, standing, and eye breaks. %@", daily];
-    [self.timeline updateActivity:activeMinutes standing:standingMinutes eyeBreaks:eyeBreakMinutes count:eyeBreakCount currentMinute:currentMinute];
+    self.timeline.accessibilityLabel = [NSString stringWithFormat:@"Today from 00:00 to 24:00: screen activity, standing, pink eye breaks, and red eye timer resets. %@", daily];
+    [self.timeline updateActivity:activeMinutes standing:standingMinutes eyeBreaks:eyeBreakMinutes breakCount:eyeBreakCount eyeResets:eyeResetMinutes resetCount:eyeResetCount currentMinute:currentMinute];
     self.eyeDue = [eye isEqualToString:@"Eye break due now"];
     self.standDue = [stand isEqualToString:@"Time to stand"];
     self.standing = standing;
@@ -337,7 +352,28 @@ static BOOL mediaKeepsDisplayAwake(void) {
     self.standStopButton.hidden = !standing;
     self.standSnoozeButton.enabled = self.standDue;
     self.standDismissButton.enabled = self.standDue;
-    if (reminder != 0 && !self.popover.isShown) [self showPopover];
+    if (reminder != 0) {
+        [self playSoundAtIndex:sound];
+        if (!self.popover.isShown) [self showPopover];
+    }
+}
+
+- (void)playSoundAtIndex:(NSUInteger)index {
+    NSArray<NSString *> *names = @[@"", @"Glass", @"Ping", @"Pop"];
+    if (index == 0 || index >= names.count) return;
+    [self.playingSound stop];
+    self.playingSound = [NSSound soundNamed:names[index]];
+    [self.playingSound play];
+}
+
+- (void)testReminderSound:(id)sender {
+    (void)sender;
+    [self playSoundAtIndex:self.soundPopup.indexOfSelectedItem];
+}
+
+- (void)soundSelectionChanged:(id)sender {
+    (void)sender;
+    self.soundTestButton.enabled = self.soundPopup.indexOfSelectedItem > 0;
 }
 
 - (void)openSettings:(id)sender {
@@ -349,16 +385,17 @@ static BOOL mediaKeepsDisplayAwake(void) {
         [NSApp activateIgnoringOtherApps:YES];
         return;
     }
-    NSWindow *window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 480, 500)
+    NSWindow *window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 480, 560)
                                                      styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
                                                        backing:NSBackingStoreBuffered defer:NO];
     window.title = @"BreakCue Settings";
     window.releasedWhenClosed = NO;
     NSView *view = window.contentView;
-    [view addSubview:label(@"Reminders", NSMakeRect(24, 465, 432, 20), YES)];
-    [view addSubview:label(@"Activity & startup", NSMakeRect(24, 228, 432, 20), YES)];
-    [view addSubview:label(@"Settings file", NSMakeRect(24, 128, 432, 20), YES)];
-    for (NSNumber *position in @[@454, @219, @119, @48]) {
+    [view addSubview:label(@"Reminders", NSMakeRect(24, 525, 432, 20), YES)];
+    [view addSubview:label(@"Sound", NSMakeRect(24, 296, 432, 20), YES)];
+    [view addSubview:label(@"Startup", NSMakeRect(24, 208, 432, 20), YES)];
+    [view addSubview:label(@"Settings file", NSMakeRect(24, 123, 432, 20), YES)];
+    for (NSNumber *position in @[@514, @286, @198, @113, @42]) {
         NSBox *separator = [[NSBox alloc] initWithFrame:NSMakeRect(24, position.doubleValue, 432, 1)];
         separator.boxType = NSBoxSeparator;
         [view addSubview:separator];
@@ -368,7 +405,7 @@ static BOOL mediaKeepsDisplayAwake(void) {
     uint32_t values[] = {config.eye_minutes, config.stand_minutes, config.daily_stand_minutes, config.snooze_minutes, config.idle_seconds};
     NSMutableArray<NSTextField *> *fields = [NSMutableArray array];
     for (int i = 0; i < 5; i++) {
-        CGFloat y = 417 - 38 * i;
+        CGFloat y = 477 - 34 * i;
         [view addSubview:label(names[i], NSMakeRect(24, y, 330, 20), NO)];
         NSTextField *field = [[NSTextField alloc] initWithFrame:NSMakeRect(370, y - 2, 86, 24)];
         field.integerValue = values[i];
@@ -376,23 +413,29 @@ static BOOL mediaKeepsDisplayAwake(void) {
         [fields addObject:field];
     }
     self.settingsFields = fields;
-    self.mediaCheckbox = [NSButton checkboxWithTitle:@"Count display-awake media playback as activity" target:nil action:nil];
-    self.mediaCheckbox.frame = NSMakeRect(24, 188, 432, 22);
-    self.mediaCheckbox.state = config.count_media ? NSControlStateValueOn : NSControlStateValueOff;
-    [view addSubview:self.mediaCheckbox];
+    [view addSubview:label(@"Reminder sound", NSMakeRect(24, 244, 188, 20), NO)];
+    self.soundPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(230, 238, 140, 28) pullsDown:NO];
+    [self.soundPopup addItemsWithTitles:@[@"Off", @"Glass", @"Ping", @"Pop"]];
+    [self.soundPopup selectItemAtIndex:MIN(config.sound, 3)];
+    self.soundPopup.target = self;
+    self.soundPopup.action = @selector(soundSelectionChanged:);
+    [view addSubview:self.soundPopup];
+    self.soundTestButton = button(@"Play", NSMakeRect(380, 238, 76, 28), self, @selector(testReminderSound:), 0);
+    self.soundTestButton.enabled = config.sound != 0;
+    [view addSubview:self.soundTestButton];
     self.startupCheckbox = [NSButton checkboxWithTitle:@"Launch at login" target:nil action:nil];
-    self.startupCheckbox.frame = NSMakeRect(24, 160, 432, 22);
+    self.startupCheckbox.frame = NSMakeRect(24, 162, 432, 22);
     self.startupCheckbox.state = SMAppService.mainAppService.status == SMAppServiceStatusEnabled ? NSControlStateValueOn : NSControlStateValueOff;
     [view addSubview:self.startupCheckbox];
-    self.settingsPathLabel = label(@"", NSMakeRect(24, 93, 432, 19), NO);
+    self.settingsPathLabel = label(@"", NSMakeRect(24, 86, 432, 19), NO);
     self.settingsPathLabel.textColor = NSColor.secondaryLabelColor;
     [view addSubview:self.settingsPathLabel];
-    [view addSubview:button(@"Choose…", NSMakeRect(24, 57, 100, 28), self, @selector(chooseSettingsFile:), 0)];
-    self.settingsOpenButton = button(@"Open File", NSMakeRect(132, 57, 88, 28), self, @selector(openSettingsFile:), 0);
+    [view addSubview:button(@"Choose…", NSMakeRect(24, 50, 100, 28), self, @selector(chooseSettingsFile:), 0)];
+    self.settingsOpenButton = button(@"Open File", NSMakeRect(132, 50, 88, 28), self, @selector(openSettingsFile:), 0);
     [view addSubview:self.settingsOpenButton];
-    [view addSubview:button(@"Use Default", NSMakeRect(228, 57, 112, 28), self, @selector(useDefaultSettingsFile:), 0)];
+    [view addSubview:button(@"Use Default", NSMakeRect(228, 50, 112, 28), self, @selector(useDefaultSettingsFile:), 0)];
     [self refreshSettingsPath];
-    [view addSubview:button(@"Save", NSMakeRect(366, 12, 90, 29), self, @selector(saveSettings:), 0)];
+    [view addSubview:button(@"Save", NSMakeRect(366, 8, 90, 29), self, @selector(saveSettings:), 0)];
     [window center];
     self.settingsWindow = window;
     [window makeKeyAndOrderFront:nil];
@@ -446,7 +489,8 @@ static BOOL mediaKeepsDisplayAwake(void) {
     BCConfig config = bc_config();
     uint32_t values[] = {config.eye_minutes, config.stand_minutes, config.daily_stand_minutes, config.snooze_minutes, config.idle_seconds};
     for (int i = 0; i < 5; i++) self.settingsFields[i].integerValue = values[i];
-    self.mediaCheckbox.state = config.count_media ? NSControlStateValueOn : NSControlStateValueOff;
+    [self.soundPopup selectItemAtIndex:MIN(config.sound, 3)];
+    self.soundTestButton.enabled = config.sound != 0;
     self.startupCheckbox.state = SMAppService.mainAppService.status == SMAppServiceStatusEnabled ? NSControlStateValueOn : NSControlStateValueOff;
     [self refreshSettingsPath];
 }
@@ -492,7 +536,7 @@ static BOOL mediaKeepsDisplayAwake(void) {
         }
         *values[i] = (uint32_t)input;
     }
-    config.count_media = self.mediaCheckbox.state == NSControlStateValueOn;
+    config.sound = (uint32_t)self.soundPopup.indexOfSelectedItem;
     bc_apply_config(config);
     SMAppService *service = SMAppService.mainAppService;
     BOOL wantStartup = self.startupCheckbox.state == NSControlStateValueOn;
@@ -511,10 +555,11 @@ static BOOL mediaKeepsDisplayAwake(void) {
 }
 @end
 
-void bc_present(bool active, bool media, uint8_t reminder, const char *eye, const char *stand, const char *daily, bool standing,
+void bc_present(bool active, uint8_t reminder, uint32_t sound, const char *eye, const char *stand, const char *daily, bool standing,
                 const uint8_t *active_minutes, const uint8_t *standing_minutes,
-                const uint16_t *eye_break_minutes, size_t eye_break_count, uint16_t current_minute) {
-    [delegate presentActive:active media:media reminder:reminder
+                const uint16_t *eye_break_minutes, size_t eye_break_count,
+                const uint16_t *eye_reset_minutes, size_t eye_reset_count, uint16_t current_minute) {
+    [delegate presentActive:active reminder:reminder sound:sound
                      eye:[NSString stringWithUTF8String:eye]
                    stand:[NSString stringWithUTF8String:stand]
                    daily:[NSString stringWithUTF8String:daily]
@@ -523,6 +568,8 @@ void bc_present(bool active, bool media, uint8_t reminder, const char *eye, cons
        standingMinutes:standing_minutes
        eyeBreakMinutes:eye_break_minutes
          eyeBreakCount:eye_break_count
+       eyeResetMinutes:eye_reset_minutes
+         eyeResetCount:eye_reset_count
          currentMinute:current_minute];
 }
 
