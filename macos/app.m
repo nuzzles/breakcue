@@ -160,7 +160,6 @@ static BOOL mediaKeepsDisplayAwake(void) {
     NSImage *image = [NSImage imageWithSystemSymbolName:symbol accessibilityDescription:active ? @"screen_doctor tracking" : @"screen_doctor paused"];
     image.template = YES;
     anchor.image = image;
-    anchor.contentTintColor = active ? NSColor.systemGreenColor : NSColor.secondaryLabelColor;
     anchor.toolTip = active ? (media ? @"screen_doctor: tracking possible media playback" : @"screen_doctor: tracking activity") : @"screen_doctor: paused while away or screen locked";
     self.stateLabel.stringValue = active ? (media ? @"Tracking · input or media playback" : @"Tracking · recent input") : @"Paused · away, locked, or display asleep";
     self.eyeLabel.stringValue = eye;
