@@ -2,7 +2,7 @@ use chrono::{Local, NaiveDate, Timelike};
 use serde::{Deserialize, Serialize};
 use std::{
     ffi::{CStr, CString},
-    fs,
+    fs, io,
     os::raw::{c_char, c_int},
     path::{Path, PathBuf},
     sync::{Mutex, OnceLock},
@@ -11,7 +11,7 @@ use std::{
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-pub struct SDConfig {
+pub struct BCConfig {
     eye_minutes: u32,
     stand_minutes: u32,
     daily_stand_minutes: u32,
@@ -45,8 +45,8 @@ impl Default for Config {
 }
 
 impl Config {
-    fn as_ffi(&self) -> SDConfig {
-        SDConfig {
+    fn as_ffi(&self) -> BCConfig {
+        BCConfig {
             eye_minutes: self.eye_minutes,
             stand_minutes: self.stand_minutes,
             daily_stand_minutes: self.daily_stand_minutes,
@@ -125,6 +125,9 @@ struct Engine {
 
 impl Engine {
     fn load() -> Self {
+        if let Err(error) = migrate_legacy_data(&legacy_app_dir(), &app_dir()) {
+            eprintln!("Could not migrate legacy data: {error}");
+        }
         let settings_path = selected_settings_path();
         let config = load_settings(&settings_path).unwrap_or_else(|| {
             // Preserve settings from earlier releases when creating the new TOML file.
@@ -337,7 +340,61 @@ impl Engine {
 
 fn app_dir() -> PathBuf {
     let home = std::env::var_os("HOME").unwrap_or_default();
+    PathBuf::from(home).join("Library/Application Support/BreakCue")
+}
+
+fn legacy_app_dir() -> PathBuf {
+    let home = std::env::var_os("HOME").unwrap_or_default();
     PathBuf::from(home).join("Library/Application Support/screen_doctor")
+}
+
+fn migrate_legacy_data(old: &Path, new: &Path) -> io::Result<()> {
+    if !old.is_dir() {
+        return Ok(());
+    }
+    fs::create_dir_all(new)?;
+    for name in [
+        "settings.toml",
+        "config.json",
+        "day.json",
+        "settings-path.txt",
+    ] {
+        let source = old.join(name);
+        if !source.is_file() {
+            continue;
+        }
+        let destination = new.join(name);
+        if destination.exists() {
+            continue;
+        }
+        let mut input = fs::File::open(&source)?;
+        let mut output = match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&destination)
+        {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        };
+        let result = if name == "settings-path.txt" {
+            let selection = fs::read_to_string(&source)?;
+            let selected = PathBuf::from(selection.trim());
+            let path = if selected == old.join("settings.toml") {
+                new.join("settings.toml")
+            } else {
+                selected
+            };
+            io::Write::write_all(&mut output, path.to_string_lossy().as_bytes())
+        } else {
+            io::copy(&mut input, &mut output).map(|_| ())
+        };
+        if let Err(error) = result {
+            let _ = fs::remove_file(&destination);
+            return Err(error);
+        }
+    }
+    Ok(())
 }
 
 fn default_settings_path() -> PathBuf {
@@ -353,7 +410,10 @@ fn selected_settings_path() -> PathBuf {
             }
         }
     }
-    if let Some(path) = std::env::var_os("SCREEN_DOCTOR_SETTINGS").filter(|path| !path.is_empty()) {
+    if let Some(path) = std::env::var_os("BREAKCUE_SETTINGS")
+        .or_else(|| std::env::var_os("SCREEN_DOCTOR_SETTINGS"))
+        .filter(|path| !path.is_empty())
+    {
         return PathBuf::from(path);
     }
     fs::read_to_string(app_dir().join("settings-path.txt"))
@@ -415,8 +475,8 @@ fn engine() -> &'static Mutex<Engine> {
 }
 
 extern "C" {
-    fn sd_app_run();
-    fn sd_present(
+    fn bc_app_run();
+    fn bc_present(
         active: bool,
         media: bool,
         reminder: u8,
@@ -461,7 +521,7 @@ fn present(e: &Engine, reminder: u8) {
     let stand = CString::new(stand).unwrap();
     let daily = CString::new(daily).unwrap();
     unsafe {
-        sd_present(
+        bc_present(
             e.active,
             e.media_active,
             reminder,
@@ -483,26 +543,26 @@ fn countdown(seconds: u64) -> String {
 }
 
 #[no_mangle]
-extern "C" fn sd_tick(idle_seconds: f64, screen_ready: bool, media_assertion: bool) {
+extern "C" fn bc_tick(idle_seconds: f64, screen_ready: bool, media_assertion: bool) {
     let mut e = engine().lock().unwrap();
     let reminder = e.tick(idle_seconds, screen_ready, media_assertion);
     present(&e, reminder);
 }
 
 #[no_mangle]
-extern "C" fn sd_action(action: c_int) {
+extern "C" fn bc_action(action: c_int) {
     let mut e = engine().lock().unwrap();
     e.action(action);
     present(&e, 0);
 }
 
 #[no_mangle]
-extern "C" fn sd_config() -> SDConfig {
+extern "C" fn bc_config() -> BCConfig {
     engine().lock().unwrap().config.as_ffi()
 }
 
 #[no_mangle]
-extern "C" fn sd_apply_config(config: SDConfig) {
+extern "C" fn bc_apply_config(config: BCConfig) {
     let mut e = engine().lock().unwrap();
     e.config = Config {
         eye_minutes: config.eye_minutes.clamp(1, 240),
@@ -517,7 +577,7 @@ extern "C" fn sd_apply_config(config: SDConfig) {
 }
 
 #[no_mangle]
-extern "C" fn sd_settings_path() -> *mut c_char {
+extern "C" fn bc_settings_path() -> *mut c_char {
     let e = engine().lock().unwrap();
     CString::new(e.settings_path.to_string_lossy().as_bytes())
         .unwrap()
@@ -525,14 +585,14 @@ extern "C" fn sd_settings_path() -> *mut c_char {
 }
 
 #[no_mangle]
-unsafe extern "C" fn sd_free_string(value: *mut c_char) {
+unsafe extern "C" fn bc_free_string(value: *mut c_char) {
     if !value.is_null() {
         drop(CString::from_raw(value));
     }
 }
 
 #[no_mangle]
-unsafe extern "C" fn sd_use_settings_file(path: *const c_char) -> bool {
+unsafe extern "C" fn bc_use_settings_file(path: *const c_char) -> bool {
     if path.is_null() {
         return false;
     }
@@ -572,18 +632,87 @@ unsafe extern "C" fn sd_use_settings_file(path: *const c_char) -> bool {
 }
 
 #[no_mangle]
-extern "C" fn sd_shutdown() {
+extern "C" fn bc_shutdown() {
     engine().lock().unwrap().save_day();
 }
 
 fn main() {
     let _ = engine();
-    unsafe { sd_app_run() };
+    unsafe { bc_app_run() };
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn migration_copies_history_and_redirects_default_settings_selection() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("breakcue-migration-{unique}"));
+        let old = root.join("screen_doctor");
+        let new = root.join("BreakCue");
+        fs::create_dir_all(&old).unwrap();
+        fs::write(old.join("settings.toml"), "eye_minutes = 25\n").unwrap();
+        fs::write(old.join("day.json"), "old history").unwrap();
+        fs::write(
+            old.join("settings-path.txt"),
+            old.join("settings.toml").to_string_lossy().as_bytes(),
+        )
+        .unwrap();
+        migrate_legacy_data(&old, &new).unwrap();
+        assert_eq!(
+            fs::read_to_string(new.join("settings.toml")).unwrap(),
+            "eye_minutes = 25\n"
+        );
+        assert_eq!(
+            fs::read_to_string(new.join("day.json")).unwrap(),
+            "old history"
+        );
+        assert_eq!(
+            fs::read_to_string(new.join("settings-path.txt")).unwrap(),
+            new.join("settings.toml").to_string_lossy()
+        );
+        fs::write(new.join("day.json"), "new history").unwrap();
+        migrate_legacy_data(&old, &new).unwrap();
+        assert_eq!(
+            fs::read_to_string(new.join("day.json")).unwrap(),
+            "new history"
+        );
+        assert_eq!(
+            fs::read_to_string(old.join("day.json")).unwrap(),
+            "old history"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn migration_keeps_custom_settings_selection() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("breakcue-custom-{unique}"));
+        let old = root.join("screen_doctor");
+        let new = root.join("BreakCue");
+        fs::create_dir_all(&old).unwrap();
+        let custom = root.join("custom.toml");
+        fs::write(
+            old.join("settings-path.txt"),
+            custom.to_string_lossy().as_bytes(),
+        )
+        .unwrap();
+        migrate_legacy_data(&old, &new).unwrap();
+        assert_eq!(
+            fs::read_to_string(new.join("settings-path.txt")).unwrap(),
+            custom.to_string_lossy()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn idle_video_counts_only_with_media_enabled_and_awake_screen() {

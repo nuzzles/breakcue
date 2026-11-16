@@ -10,18 +10,18 @@ typedef struct {
     uint32_t snooze_minutes;
     uint32_t idle_seconds;
     bool count_media;
-} SDConfig;
+} BCConfig;
 
-extern void sd_tick(double idle_seconds, bool screen_ready, bool media_assertion);
-extern void sd_action(int action);
-extern SDConfig sd_config(void);
-extern void sd_apply_config(SDConfig config);
-extern char *sd_settings_path(void);
-extern void sd_free_string(char *value);
-extern bool sd_use_settings_file(const char *path);
-extern void sd_shutdown(void);
+extern void bc_tick(double idle_seconds, bool screen_ready, bool media_assertion);
+extern void bc_action(int action);
+extern BCConfig bc_config(void);
+extern void bc_apply_config(BCConfig config);
+extern char *bc_settings_path(void);
+extern void bc_free_string(char *value);
+extern bool bc_use_settings_file(const char *path);
+extern void bc_shutdown(void);
 
-@interface SDTimelineView : NSView
+@interface BCTimelineView : NSView
 @property (strong) NSData *activity;
 @property (strong) NSData *standing;
 @property (strong) NSData *eyeBreaks;
@@ -34,7 +34,7 @@ extern void sd_shutdown(void);
          currentMinute:(uint16_t)currentMinute;
 @end
 
-@interface SDAppDelegate : NSObject <NSApplicationDelegate>
+@interface BCAppDelegate : NSObject <NSApplicationDelegate>
 @property (strong) NSStatusItem *statusItem;
 @property (strong) NSPopover *popover;
 @property (strong) NSWindow *settingsWindow;
@@ -42,7 +42,7 @@ extern void sd_shutdown(void);
 @property (strong) NSImageView *trackingIcon;
 @property (strong) NSTextField *eyeLabel;
 @property (strong) NSTextField *standLabel;
-@property (strong) SDTimelineView *timeline;
+@property (strong) BCTimelineView *timeline;
 @property (strong) NSButton *eyeStartButton;
 @property (strong) NSButton *eyeResetButton;
 @property (strong) NSButton *eyeSnoozeButton;
@@ -63,9 +63,9 @@ extern void sd_shutdown(void);
 @property (assign) bool standing;
 @end
 
-static SDAppDelegate *doctor;
+static BCAppDelegate *delegate;
 
-@implementation SDTimelineView
+@implementation BCTimelineView
 
 - (void)updateActivity:(const uint8_t *)activity
               standing:(const uint8_t *)standing
@@ -190,7 +190,7 @@ static BOOL mediaKeepsDisplayAwake(void) {
     return value.integerValue > 0;
 }
 
-@implementation SDAppDelegate
+@implementation BCAppDelegate
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     (void)notification;
@@ -207,14 +207,14 @@ static BOOL mediaKeepsDisplayAwake(void) {
     (void)notification;
     if (self.localMouseMonitor) [NSEvent removeMonitor:self.localMouseMonitor];
     if (self.globalMouseMonitor) [NSEvent removeMonitor:self.globalMouseMonitor];
-    sd_shutdown();
+    bc_shutdown();
 }
 
 - (void)installClickAwayMonitors {
     __weak typeof(self) weakSelf = self;
     NSEventMask clicks = NSEventMaskLeftMouseDown | NSEventMaskRightMouseDown;
     self.localMouseMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:clicks handler:^NSEvent *(NSEvent *event) {
-        SDAppDelegate *owner = weakSelf;
+        BCAppDelegate *owner = weakSelf;
         if (owner.popover.isShown && event.window != owner.popover.contentViewController.view.window
             && event.window != owner.statusItem.button.window) {
             [owner.popover performClose:nil];
@@ -223,7 +223,7 @@ static BOOL mediaKeepsDisplayAwake(void) {
     }];
     self.globalMouseMonitor = [NSEvent addGlobalMonitorForEventsMatchingMask:clicks handler:^(NSEvent *event) {
         (void)event;
-        SDAppDelegate *owner = weakSelf;
+        BCAppDelegate *owner = weakSelf;
         if (owner.popover.isShown) [owner.popover performClose:nil];
     }];
 }
@@ -233,7 +233,7 @@ static BOOL mediaKeepsDisplayAwake(void) {
     NSView *view = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 336, 360)];
     controller.view = view;
 
-    NSTextField *title = label(@"Screen Doctor", NSMakeRect(18, 327, 180, 23), YES);
+    NSTextField *title = label(@"BreakCue", NSMakeRect(18, 327, 180, 23), YES);
     title.font = [NSFont boldSystemFontOfSize:15];
     [view addSubview:title];
     self.trackingLabel = label(@"Idle", NSMakeRect(218, 329, 79, 20), NO);
@@ -264,7 +264,7 @@ static BOOL mediaKeepsDisplayAwake(void) {
     self.standDismissButton = button(@"Dismiss", NSMakeRect(246, 195, 76, 28), self, @selector(performAction:), 8);
     for (NSButton *control in @[self.standStartButton, self.standStopButton, self.standSnoozeButton, self.standDismissButton]) [view addSubview:control];
 
-    self.timeline = [[SDTimelineView alloc] initWithFrame:NSMakeRect(8, 48, 320, 93)];
+    self.timeline = [[BCTimelineView alloc] initWithFrame:NSMakeRect(8, 48, 320, 93)];
     self.timeline.accessibilityLabel = @"Today from 00:00 to 24:00: screen activity, standing, and eye breaks";
     [view addSubview:self.timeline];
 
@@ -278,7 +278,7 @@ static BOOL mediaKeepsDisplayAwake(void) {
 
 - (void)updateActivity {
     double idle = CGEventSourceSecondsSinceLastEventType(kCGEventSourceStateCombinedSessionState, kCGAnyInputEventType);
-    sd_tick(idle, screenReady(), mediaKeepsDisplayAwake());
+    bc_tick(idle, screenReady(), mediaKeepsDisplayAwake());
 }
 
 - (void)togglePopover:(id)sender {
@@ -294,7 +294,7 @@ static BOOL mediaKeepsDisplayAwake(void) {
 }
 
 - (void)performAction:(NSButton *)sender {
-    sd_action((int)sender.tag);
+    bc_action((int)sender.tag);
 }
 
 - (void)presentActive:(BOOL)active
@@ -312,7 +312,7 @@ static BOOL mediaKeepsDisplayAwake(void) {
     (void)media;
     NSButton *anchor = self.statusItem.button;
     NSString *symbol = active ? @"eye.fill" : @"eye.slash";
-    NSImage *image = [NSImage imageWithSystemSymbolName:symbol accessibilityDescription:active ? @"screen_doctor tracking" : @"screen_doctor paused"];
+    NSImage *image = [NSImage imageWithSystemSymbolName:symbol accessibilityDescription:active ? @"BreakCue tracking" : @"BreakCue paused"];
     image.template = YES;
     anchor.image = image;
     self.trackingLabel.stringValue = active ? @"Tracking" : @"Idle";
@@ -352,7 +352,7 @@ static BOOL mediaKeepsDisplayAwake(void) {
     NSWindow *window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 480, 500)
                                                      styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
                                                        backing:NSBackingStoreBuffered defer:NO];
-    window.title = @"Screen Doctor Settings";
+    window.title = @"BreakCue Settings";
     window.releasedWhenClosed = NO;
     NSView *view = window.contentView;
     [view addSubview:label(@"Reminders", NSMakeRect(24, 465, 432, 20), YES)];
@@ -363,7 +363,7 @@ static BOOL mediaKeepsDisplayAwake(void) {
         separator.boxType = NSBoxSeparator;
         [view addSubview:separator];
     }
-    SDConfig config = sd_config();
+    BCConfig config = bc_config();
     NSArray<NSString *> *names = @[@"Eye interval (active minutes)", @"Stand interval (active minutes)", @"Daily standing goal (minutes)", @"Snooze (minutes)", @"Away after no input (seconds)"];
     uint32_t values[] = {config.eye_minutes, config.stand_minutes, config.daily_stand_minutes, config.snooze_minutes, config.idle_seconds};
     NSMutableArray<NSTextField *> *fields = [NSMutableArray array];
@@ -400,18 +400,18 @@ static BOOL mediaKeepsDisplayAwake(void) {
 }
 
 - (void)refreshSettingsPath {
-    char *path = sd_settings_path();
+    char *path = bc_settings_path();
     self.settingsPathLabel.stringValue = path ? [NSString stringWithUTF8String:path] : @"";
     self.settingsPathLabel.toolTip = self.settingsPathLabel.stringValue;
     self.settingsOpenButton.enabled = path && [[NSFileManager defaultManager] isReadableFileAtPath:self.settingsPathLabel.stringValue];
-    sd_free_string(path);
+    bc_free_string(path);
 }
 
 - (void)openSettingsFile:(id)sender {
     (void)sender;
-    char *rawPath = sd_settings_path();
+    char *rawPath = bc_settings_path();
     NSString *path = rawPath ? [NSString stringWithUTF8String:rawPath] : nil;
-    sd_free_string(rawPath);
+    bc_free_string(rawPath);
     NSWorkspace *workspace = NSWorkspace.sharedWorkspace;
     NSURL *fileURL = path ? [NSURL fileURLWithPath:path] : nil;
     NSURL *editorURL = fileURL ? [workspace URLForApplicationToOpenURL:fileURL] : nil;
@@ -443,7 +443,7 @@ static BOOL mediaKeepsDisplayAwake(void) {
 }
 
 - (void)refreshSettingsValues {
-    SDConfig config = sd_config();
+    BCConfig config = bc_config();
     uint32_t values[] = {config.eye_minutes, config.stand_minutes, config.daily_stand_minutes, config.snooze_minutes, config.idle_seconds};
     for (int i = 0; i < 5; i++) self.settingsFields[i].integerValue = values[i];
     self.mediaCheckbox.state = config.count_media ? NSControlStateValueOn : NSControlStateValueOff;
@@ -458,7 +458,7 @@ static BOOL mediaKeepsDisplayAwake(void) {
     panel.canChooseFiles = YES;
     [panel beginSheetModalForWindow:self.settingsWindow completionHandler:^(NSModalResponse result) {
         if (result != NSModalResponseOK) return;
-        if (!sd_use_settings_file(panel.URL.path.UTF8String)) {
+        if (!bc_use_settings_file(panel.URL.path.UTF8String)) {
             [self showInvalidSettingsFile];
             return;
         }
@@ -468,8 +468,8 @@ static BOOL mediaKeepsDisplayAwake(void) {
 
 - (void)useDefaultSettingsFile:(id)sender {
     (void)sender;
-    NSString *path = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/screen_doctor/settings.toml"];
-    if (!sd_use_settings_file(path.UTF8String)) {
+    NSString *path = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/BreakCue/settings.toml"];
+    if (!bc_use_settings_file(path.UTF8String)) {
         [self showInvalidSettingsFile];
         return;
     }
@@ -478,7 +478,7 @@ static BOOL mediaKeepsDisplayAwake(void) {
 
 - (void)saveSettings:(id)sender {
     (void)sender;
-    SDConfig config = sd_config();
+    BCConfig config = bc_config();
     uint32_t *values[] = {&config.eye_minutes, &config.stand_minutes, &config.daily_stand_minutes, &config.snooze_minutes, &config.idle_seconds};
     int limits[] = {240, 240, 480, 60, 900};
     for (int i = 0; i < 5; i++) {
@@ -493,7 +493,7 @@ static BOOL mediaKeepsDisplayAwake(void) {
         *values[i] = (uint32_t)input;
     }
     config.count_media = self.mediaCheckbox.state == NSControlStateValueOn;
-    sd_apply_config(config);
+    bc_apply_config(config);
     SMAppService *service = SMAppService.mainAppService;
     BOOL wantStartup = self.startupCheckbox.state == NSControlStateValueOn;
     BOOL registered = service.status == SMAppServiceStatusEnabled;
@@ -511,10 +511,10 @@ static BOOL mediaKeepsDisplayAwake(void) {
 }
 @end
 
-void sd_present(bool active, bool media, uint8_t reminder, const char *eye, const char *stand, const char *daily, bool standing,
+void bc_present(bool active, bool media, uint8_t reminder, const char *eye, const char *stand, const char *daily, bool standing,
                 const uint8_t *active_minutes, const uint8_t *standing_minutes,
                 const uint16_t *eye_break_minutes, size_t eye_break_count, uint16_t current_minute) {
-    [doctor presentActive:active media:media reminder:reminder
+    [delegate presentActive:active media:media reminder:reminder
                      eye:[NSString stringWithUTF8String:eye]
                    stand:[NSString stringWithUTF8String:stand]
                    daily:[NSString stringWithUTF8String:daily]
@@ -526,12 +526,12 @@ void sd_present(bool active, bool media, uint8_t reminder, const char *eye, cons
          currentMinute:current_minute];
 }
 
-void sd_app_run(void) {
+void bc_app_run(void) {
     @autoreleasepool {
         NSApplication *app = NSApplication.sharedApplication;
         app.activationPolicy = NSApplicationActivationPolicyAccessory;
-        doctor = [[SDAppDelegate alloc] init];
-        app.delegate = doctor;
+        delegate = [[BCAppDelegate alloc] init];
+        app.delegate = delegate;
         [app run];
     }
 }
