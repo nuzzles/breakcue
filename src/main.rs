@@ -535,6 +535,8 @@ fn present(e: &Engine, reminder: u8) {
         )
     } else if e.eye_due {
         "Eye break in 0:00".to_owned()
+    } else if let Some(until) = e.eye_snoozed_until {
+        format!("Eye break in {}", countdown(seconds_until(until)))
     } else {
         let left = (e.config.eye_minutes as u64 * 60).saturating_sub(e.eye_active_seconds);
         format!("Eye break in {}", countdown(left))
@@ -543,6 +545,8 @@ fn present(e: &Engine, reminder: u8) {
         format!("Standing: {} min", e.standing_seconds / 60)
     } else if e.stand_due {
         "Stand in 0:00".to_owned()
+    } else if let Some(until) = e.stand_snoozed_until {
+        format!("Stand in {}", countdown(seconds_until(until)))
     } else {
         let left = (e.config.stand_minutes as u64 * 60).saturating_sub(e.stand_active_seconds);
         format!("Stand in {}", countdown(left))
@@ -577,6 +581,11 @@ fn present(e: &Engine, reminder: u8) {
 
 fn countdown(seconds: u64) -> String {
     format!("{:02}:{:02}", seconds / 60, seconds % 60)
+}
+
+fn seconds_until(until: Instant) -> u64 {
+    let remaining = until.saturating_duration_since(Instant::now());
+    remaining.as_secs() + u64::from(remaining.subsec_nanos() > 0)
 }
 
 fn credited_whole_seconds(gap: Duration, remainder: &mut Duration) -> u64 {
@@ -830,6 +839,37 @@ mod tests {
         e.action(2);
         assert_eq!(e.eye_active_seconds, 45);
         assert!(e.eye_snoozed_until.is_none());
+    }
+
+    #[test]
+    fn eye_snooze_counts_down_without_recording_a_break() {
+        let mut e = Engine::load();
+        e.config.snooze_minutes = 5;
+        e.eye_due = true;
+        e.eye_active_seconds = e.config.eye_minutes as u64 * 60;
+        let breaks = e.day.eye_break_minutes.len();
+        let resets = e.day.eye_reset_minutes.len();
+        e.action(2);
+        assert!(!e.eye_due);
+        assert_eq!(seconds_until(e.eye_snoozed_until.unwrap()), 300);
+        assert_eq!(e.day.eye_break_minutes.len(), breaks);
+        assert_eq!(e.day.eye_reset_minutes.len(), resets);
+        e.tick(0.0, true, false);
+        assert!(!e.eye_due);
+        e.eye_snoozed_until = Some(Instant::now() - Duration::from_secs(1));
+        e.tick(0.0, true, false);
+        assert!(e.eye_due);
+        assert_eq!(e.day.eye_break_minutes.len(), breaks);
+    }
+
+    #[test]
+    fn standing_snooze_uses_configured_countdown() {
+        let mut e = Engine::load();
+        e.config.snooze_minutes = 7;
+        e.stand_due = true;
+        e.action(7);
+        assert!(!e.stand_due);
+        assert_eq!(seconds_until(e.stand_snoozed_until.unwrap()), 420);
     }
 
     #[test]

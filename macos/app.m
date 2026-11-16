@@ -51,6 +51,8 @@ extern void bc_shutdown(void);
 @property (strong) NSMenu *menu;
 @property (assign) BOOL menuOpen;
 @property (assign) BOOL menuPositioned;
+@property (assign) BOOL openingReminder;
+@property (assign) NSPoint reminderLocation;
 @property (strong) NSView *menuContent;
 @property (strong) NSPanel *caretWindow;
 @property (strong) NSWindow *settingsWindow;
@@ -281,6 +283,7 @@ static BOOL mediaKeepsDisplayAwake(void) {
     (void)menu;
     self.menuOpen = NO;
     self.menuPositioned = NO;
+    self.openingReminder = NO;
     [self.caretWindow orderOut:nil];
 }
 
@@ -291,11 +294,42 @@ static BOOL mediaKeepsDisplayAwake(void) {
     NSRect anchorInWindow = [anchor convertRect:anchor.bounds toView:nil];
     NSRect anchorOnScreen = [anchor.window convertRectToScreen:anchorInWindow];
     NSRect frame = menuWindow.frame;
-    NSRect screen = anchor.window.screen.frame;
-    CGFloat left = NSMidX(anchorOnScreen) - NSWidth(frame) / 2;
+    NSScreen *anchorScreen = nil;
+    for (NSScreen *candidate in NSScreen.screens) {
+        if (NSPointInRect(NSMakePoint(NSMidX(anchorOnScreen), NSMidY(anchorOnScreen)), candidate.frame)) {
+            anchorScreen = candidate;
+            break;
+        }
+    }
+    if (!anchorScreen) anchorScreen = anchor.window.screen ?: NSScreen.mainScreen;
+    NSScreen *targetScreen = anchorScreen;
+    if (self.openingReminder) {
+        for (NSScreen *candidate in NSScreen.screens) {
+            if (NSPointInRect(self.reminderLocation, candidate.frame)) {
+                targetScreen = candidate;
+                break;
+            }
+        }
+    }
+    if (!targetScreen) return;
+    CGFloat anchorX = NSMidX(anchorOnScreen);
+    CGFloat anchorBottom = NSMinY(anchorOnScreen);
+    if (self.openingReminder && anchorScreen != targetScreen) {
+        // Status items repeat on separate menu bars. Keep its distance from the
+        // right edge when opening a reminder on the display in use.
+        anchorX = NSMaxX(targetScreen.frame) - (NSMaxX(anchorScreen.frame) - anchorX);
+        anchorBottom = NSMaxY(targetScreen.frame) - (NSMaxY(anchorScreen.frame) - anchorBottom);
+    }
+    NSRect screen = targetScreen.frame;
+    CGFloat left = anchorX - NSWidth(frame) / 2;
     left = MAX(NSMinX(screen) + 8, MIN(left, NSMaxX(screen) - NSWidth(frame) - 8));
     frame.origin.x = left;
-    frame.origin.y = NSMinY(anchorOnScreen) - NSHeight(frame) - 7;
+    // A programmatic click can open the menu while macOS has auto-hidden the
+    // menu bar, reporting the button at the display's top edge. Reserve its
+    // usual height so the caret and the menu header remain on screen.
+    CGFloat menuBarBottom = NSMaxY(screen) - NSStatusBar.systemStatusBar.thickness;
+    CGFloat bottom = MIN(anchorBottom, menuBarBottom) - NSHeight(frame) - 7;
+    frame.origin.y = MAX(NSMinY(screen) + 8, MIN(bottom, NSMaxY(screen) - NSHeight(frame) - 8));
     self.menuPositioned = YES;
     [menuWindow setFrameOrigin:frame.origin];
     CGFloat pointerX = NSMidX(frame) - 11;
@@ -415,7 +449,11 @@ static BOOL mediaKeepsDisplayAwake(void) {
     self.standDismissButton.enabled = self.standDue;
     if (reminder != 0) {
         [self playSoundAtIndex:sound];
-        if (!self.menuOpen) [self.statusItem.button performClick:nil];
+        if (!self.menuOpen) {
+            self.openingReminder = YES;
+            self.reminderLocation = NSEvent.mouseLocation;
+            [self.statusItem.button performClick:nil];
+        }
     }
 }
 
