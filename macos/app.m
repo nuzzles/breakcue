@@ -344,7 +344,6 @@ static BOOL mediaKeepsDisplayAwake(void) {
     self.eyeLabel.textColor = self.eyeDue ? NSColor.systemRedColor : NSColor.labelColor;
     self.standLabel.textColor = self.standDue ? NSColor.systemRedColor : NSColor.labelColor;
     self.eyeSnoozeButton.enabled = self.eyeDue;
-    self.eyeResetButton.enabled = self.eyeDue;
     self.standStartButton.hidden = standing;
     self.standStopButton.hidden = !standing;
     self.standSnoozeButton.enabled = self.standDue;
