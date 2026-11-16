@@ -127,13 +127,13 @@ static BCAppDelegate *delegate;
                                    NSParagraphStyleAttributeName: rightAligned}];
     [self drawText:@"Screen" x:11 y:54 color:NSColor.labelColor font:small];
     [self drawText:@"Standing" x:11 y:35 color:NSColor.labelColor font:small];
-    [self drawText:@"Breaks" x:11 y:16 color:NSColor.systemPinkColor font:small];
-    [self drawText:@"·" x:44 y:16 color:secondary font:small];
-    [self drawText:@"Resets" x:51 y:16 color:NSColor.systemRedColor font:small];
+    [self drawText:@"Eye" x:11 y:16 color:NSColor.labelColor font:small];
     [NSColor.systemTealColor setFill];
     NSRectFill(NSMakeRect(67, 57, 6, 6));
     [NSColor.systemOrangeColor setFill];
     NSRectFill(NSMakeRect(67, 38, 6, 6));
+    [NSColor.systemRedColor setFill];
+    NSRectFill(NSMakeRect(67, 19, 6, 6));
 
     [[NSColor.separatorColor colorWithAlphaComponent:0.32] setFill];
     for (CGFloat y = 54; y >= 16; y -= 19) {
@@ -154,16 +154,16 @@ static BCAppDelegate *delegate;
     [[NSColor.labelColor colorWithAlphaComponent:0.62] setFill];
     NSRectFill(NSMakeRect(nowX, 14, 1, 51));
     const uint16_t *eyeMinutes = self.eyeBreaks.bytes;
-    [[NSColor.systemPinkColor colorWithAlphaComponent:0.95] setFill];
+    [NSColor.systemRedColor setFill];
     for (NSUInteger index = 0; index < self.eyeBreaks.length / sizeof(uint16_t); index++) {
         CGFloat x = plotX + plotWidth * eyeMinutes[index] / 1440.0;
-        NSRectFill(NSMakeRect(x - 1.5, 24, 3, 5));
+        NSRectFill(NSMakeRect(x - 1.5, 14, 3, 14));
     }
     const uint16_t *resetMinutes = self.eyeResets.bytes;
     [NSColor.systemRedColor setFill];
     for (NSUInteger index = 0; index < self.eyeResets.length / sizeof(uint16_t); index++) {
         CGFloat x = plotX + plotWidth * resetMinutes[index] / 1440.0;
-        NSRectFill(NSMakeRect(x - 1.5, 14, 3, 10));
+        NSRectFill(NSMakeRect(x - 1.5, 14, 3, 14));
     }
 }
 @end
@@ -212,7 +212,8 @@ static BOOL mediaKeepsDisplayAwake(void) {
     [self makePopover];
     [self updateActivity];
     [self installClickAwayMonitors];
-    [NSTimer scheduledTimerWithTimeInterval:1 target:self selector:@selector(updateActivity) userInfo:nil repeats:YES];
+    NSTimer *timer = [NSTimer timerWithTimeInterval:0.25 target:self selector:@selector(updateActivity) userInfo:nil repeats:YES];
+    [[NSRunLoop mainRunLoop] addTimer:timer forMode:NSRunLoopCommonModes];
 }
 
 - (void)applicationWillTerminate:(NSNotification *)notification {
@@ -275,7 +276,7 @@ static BOOL mediaKeepsDisplayAwake(void) {
     for (NSButton *control in @[self.standStartButton, self.standStopButton, self.standSnoozeButton, self.standDismissButton]) [view addSubview:control];
 
     self.timeline = [[BCTimelineView alloc] initWithFrame:NSMakeRect(8, 63, 320, 93)];
-    self.timeline.accessibilityLabel = @"Today from 00:00 to 24:00: screen activity, standing, pink eye breaks, and red eye timer resets";
+    self.timeline.accessibilityLabel = @"Today from 00:00 to 24:00: screen activity, standing, and red eye break marks";
     [view addSubview:self.timeline];
 
     [view addSubview:button(@"Settings…", NSMakeRect(18, 7, 100, 28), self, @selector(openSettings:), 0)];
@@ -335,7 +336,7 @@ static BOOL mediaKeepsDisplayAwake(void) {
     self.standLabel.stringValue = stand;
     self.timeline.standingGoal = [NSString stringWithFormat:@"STAND %@", [daily stringByReplacingOccurrencesOfString:@"Standing today: " withString:@""]];
     self.timeline.toolTip = daily;
-    self.timeline.accessibilityLabel = [NSString stringWithFormat:@"Today from 00:00 to 24:00: screen activity, standing, pink eye breaks, and red eye timer resets. %@", daily];
+    self.timeline.accessibilityLabel = [NSString stringWithFormat:@"Today from 00:00 to 24:00: screen activity, standing, and red eye break marks. %@", daily];
     [self.timeline updateActivity:activeMinutes standing:standingMinutes eyeBreaks:eyeBreakMinutes breakCount:eyeBreakCount eyeResets:eyeResetMinutes resetCount:eyeResetCount currentMinute:currentMinute];
     self.eyeDue = [eye isEqualToString:@"Eye break in 0:00"];
     self.standDue = [stand isEqualToString:@"Stand in 0:00"];

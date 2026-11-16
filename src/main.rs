@@ -133,6 +133,7 @@ struct Engine {
     settings_path: PathBuf,
     day: DayRecord,
     last_tick: Instant,
+    tick_remainder: Duration,
     last_save: Instant,
     eye_active_seconds: u64,
     stand_active_seconds: u64,
@@ -179,6 +180,7 @@ impl Engine {
             settings_path,
             day,
             last_tick: now,
+            tick_remainder: Duration::ZERO,
             last_save: now,
             eye_active_seconds: 0,
             stand_active_seconds: 0,
@@ -197,7 +199,8 @@ impl Engine {
     fn tick(&mut self, idle_seconds: f64, screen_ready: bool, media_assertion: bool) -> u8 {
         let now = Instant::now();
         // A sleep/wake gap must not become hours of credited activity or standing time.
-        let elapsed = now.duration_since(self.last_tick).as_secs().min(10);
+        let elapsed =
+            credited_whole_seconds(now.duration_since(self.last_tick), &mut self.tick_remainder);
         self.last_tick = now;
         let local_now = Local::now();
         let today = local_now.date_naive();
@@ -576,6 +579,14 @@ fn countdown(seconds: u64) -> String {
     format!("{:02}:{:02}", seconds / 60, seconds % 60)
 }
 
+fn credited_whole_seconds(gap: Duration, remainder: &mut Duration) -> u64 {
+    // Limit sleep/wake gaps while retaining fractions between normal timer callbacks.
+    *remainder += gap.min(Duration::from_secs(10));
+    let whole = remainder.as_secs();
+    *remainder -= Duration::from_secs(whole);
+    whole
+}
+
 #[no_mangle]
 extern "C" fn bc_tick(idle_seconds: f64, screen_ready: bool, media_assertion: bool) {
     let mut e = engine().lock().unwrap();
@@ -864,5 +875,31 @@ mod tests {
         assert_eq!(countdown(19 * 60 + 32), "19:32");
         assert_eq!(countdown(120 * 60), "120:00");
         assert_eq!(countdown(0), "00:00");
+    }
+
+    #[test]
+    fn timer_callbacks_keep_fractional_elapsed_time() {
+        let mut remainder = Duration::ZERO;
+        assert_eq!(
+            credited_whole_seconds(Duration::from_millis(550), &mut remainder),
+            0
+        );
+        assert_eq!(
+            credited_whole_seconds(Duration::from_millis(550), &mut remainder),
+            1
+        );
+        assert_eq!(
+            credited_whole_seconds(Duration::from_millis(850), &mut remainder),
+            0
+        );
+        assert_eq!(
+            credited_whole_seconds(Duration::from_millis(50), &mut remainder),
+            1
+        );
+        assert_eq!(remainder, Duration::ZERO);
+        assert_eq!(
+            credited_whole_seconds(Duration::from_secs(60), &mut remainder),
+            10
+        );
     }
 }
