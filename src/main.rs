@@ -290,6 +290,13 @@ impl Engine {
                 let minute = (Local::now().time().num_seconds_from_midnight() / 60) as u16;
                 self.day.eye_break_minutes.push(minute);
             }
+            4 => {
+                // Restart the eye interval, including a due or snoozed reminder.
+                self.eye_due = false;
+                self.eye_active_seconds = 0;
+                self.eye_snoozed_until = None;
+                self.eye_break_start = None;
+            }
             5 => {
                 // Start a self-reported standing session.
                 self.standing = true;
@@ -658,5 +665,17 @@ mod tests {
         e.action(8);
         assert_eq!(e.stand_active_seconds, 0);
         assert!(!e.stand_due);
+    }
+
+    #[test]
+    fn reset_eye_timer_clears_due_and_snoozed_state() {
+        let mut e = Engine::load();
+        e.eye_active_seconds = 600;
+        e.eye_due = true;
+        e.eye_snoozed_until = Some(Instant::now() + Duration::from_secs(300));
+        e.action(4);
+        assert_eq!(e.eye_active_seconds, 0);
+        assert!(!e.eye_due);
+        assert!(e.eye_snoozed_until.is_none());
     }
 }

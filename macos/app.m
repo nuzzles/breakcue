@@ -25,6 +25,7 @@ extern void sd_shutdown(void);
 @property (strong) NSData *activity;
 @property (strong) NSData *standing;
 @property (strong) NSData *eyeBreaks;
+@property (strong) NSString *standingGoal;
 @property (assign) uint16_t currentMinute;
 - (void)updateActivity:(const uint8_t *)activity
               standing:(const uint8_t *)standing
@@ -41,9 +42,9 @@ extern void sd_shutdown(void);
 @property (strong) NSImageView *trackingIcon;
 @property (strong) NSTextField *eyeLabel;
 @property (strong) NSTextField *standLabel;
-@property (strong) NSTextField *dailyLabel;
 @property (strong) SDTimelineView *timeline;
 @property (strong) NSButton *eyeStartButton;
+@property (strong) NSButton *eyeResetButton;
 @property (strong) NSButton *eyeSnoozeButton;
 @property (strong) NSButton *eyeDismissButton;
 @property (strong) NSButton *standStartButton;
@@ -111,6 +112,12 @@ static SDAppDelegate *doctor;
     NSColor *secondary = NSColor.secondaryLabelColor;
     NSFont *small = [NSFont systemFontOfSize:10 weight:NSFontWeightMedium];
     [self drawText:@"TODAY · 00:00–24:00" x:11 y:76 color:secondary font:small];
+    NSMutableParagraphStyle *rightAligned = [[NSMutableParagraphStyle alloc] init];
+    rightAligned.alignment = NSTextAlignmentRight;
+    [self.standingGoal drawInRect:NSMakeRect(172, 76, bounds.size.width - 183, 14)
+                  withAttributes:@{NSForegroundColorAttributeName: secondary,
+                                   NSFontAttributeName: small,
+                                   NSParagraphStyleAttributeName: rightAligned}];
     [self drawText:@"Screen" x:11 y:54 color:NSColor.labelColor font:small];
     [self drawText:@"Standing" x:11 y:35 color:NSColor.labelColor font:small];
     [self drawText:@"Eye breaks" x:11 y:16 color:NSColor.labelColor font:small];
@@ -222,42 +229,41 @@ static BOOL mediaKeepsDisplayAwake(void) {
 
 - (void)makePopover {
     NSViewController *controller = [[NSViewController alloc] init];
-    NSView *view = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 336, 330)];
+    NSView *view = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 336, 360)];
     controller.view = view;
 
-    NSTextField *title = label(@"Screen Doctor", NSMakeRect(18, 297, 180, 23), YES);
+    NSTextField *title = label(@"Screen Doctor", NSMakeRect(18, 327, 180, 23), YES);
     title.font = [NSFont boldSystemFontOfSize:15];
     [view addSubview:title];
-    self.trackingLabel = label(@"Idle", NSMakeRect(218, 299, 79, 20), NO);
+    self.trackingLabel = label(@"Idle", NSMakeRect(218, 329, 79, 20), NO);
     self.trackingLabel.alignment = NSTextAlignmentRight;
     NSFontDescriptor *italic = [[NSFont systemFontOfSize:12].fontDescriptor fontDescriptorWithSymbolicTraits:NSFontDescriptorTraitItalic];
     self.trackingLabel.font = [NSFont fontWithDescriptor:italic size:12] ?: [NSFont systemFontOfSize:12];
     self.trackingLabel.textColor = NSColor.secondaryLabelColor;
     [view addSubview:self.trackingLabel];
-    self.trackingIcon = [[NSImageView alloc] initWithFrame:NSMakeRect(304, 301, 15, 15)];
+    self.trackingIcon = [[NSImageView alloc] initWithFrame:NSMakeRect(304, 334, 15, 15)];
     [view addSubview:self.trackingIcon];
-    NSBox *separator = [[NSBox alloc] initWithFrame:NSMakeRect(18, 286, 304, 1)];
+    NSBox *separator = [[NSBox alloc] initWithFrame:NSMakeRect(18, 316, 304, 1)];
     separator.boxType = NSBoxSeparator;
     [view addSubview:separator];
 
-    self.eyeLabel = label(@"", NSMakeRect(18, 244, 146, 20), YES);
+    self.eyeLabel = label(@"", NSMakeRect(18, 269, 146, 20), YES);
     [view addSubview:self.eyeLabel];
-    self.eyeStartButton = button(@"Start eye break", NSMakeRect(18, 239, 144, 28), self, @selector(performAction:), 3);
-    self.eyeSnoozeButton = button(@"Snooze", NSMakeRect(170, 239, 72, 28), self, @selector(performAction:), 2);
-    self.eyeDismissButton = button(@"Dismiss", NSMakeRect(246, 239, 76, 28), self, @selector(performAction:), 1);
-    for (NSButton *control in @[self.eyeStartButton, self.eyeSnoozeButton, self.eyeDismissButton]) [view addSubview:control];
+    self.eyeStartButton = button(@"Start eye break", NSMakeRect(18, 267, 144, 28), self, @selector(performAction:), 3);
+    self.eyeSnoozeButton = button(@"Snooze", NSMakeRect(170, 267, 72, 28), self, @selector(performAction:), 2);
+    self.eyeDismissButton = button(@"Dismiss", NSMakeRect(246, 267, 76, 28), self, @selector(performAction:), 1);
+    self.eyeResetButton = button(@"Reset eye timer", NSMakeRect(18, 233, 304, 28), self, @selector(performAction:), 4);
+    for (NSButton *control in @[self.eyeStartButton, self.eyeSnoozeButton, self.eyeDismissButton, self.eyeResetButton]) [view addSubview:control];
 
-    self.standLabel = label(@"", NSMakeRect(18, 198, 146, 20), YES);
+    self.standLabel = label(@"", NSMakeRect(18, 197, 146, 20), YES);
     [view addSubview:self.standLabel];
-    self.dailyLabel = label(@"", NSMakeRect(18, 174, 300, 18), NO);
-    [view addSubview:self.dailyLabel];
-    self.standStartButton = button(@"Start standing", NSMakeRect(18, 140, 126, 28), self, @selector(performAction:), 5);
-    self.standStopButton = button(@"Stop standing", NSMakeRect(18, 140, 126, 28), self, @selector(performAction:), 6);
-    self.standSnoozeButton = button(@"Snooze", NSMakeRect(170, 193, 72, 28), self, @selector(performAction:), 7);
-    self.standDismissButton = button(@"Dismiss", NSMakeRect(246, 193, 76, 28), self, @selector(performAction:), 8);
+    self.standStartButton = button(@"Start standing", NSMakeRect(18, 155, 304, 28), self, @selector(performAction:), 5);
+    self.standStopButton = button(@"Stop standing", NSMakeRect(18, 155, 304, 28), self, @selector(performAction:), 6);
+    self.standSnoozeButton = button(@"Snooze", NSMakeRect(170, 195, 72, 28), self, @selector(performAction:), 7);
+    self.standDismissButton = button(@"Dismiss", NSMakeRect(246, 195, 76, 28), self, @selector(performAction:), 8);
     for (NSButton *control in @[self.standStartButton, self.standStopButton, self.standSnoozeButton, self.standDismissButton]) [view addSubview:control];
 
-    self.timeline = [[SDTimelineView alloc] initWithFrame:NSMakeRect(8, 39, 320, 93)];
+    self.timeline = [[SDTimelineView alloc] initWithFrame:NSMakeRect(8, 48, 320, 93)];
     self.timeline.accessibilityLabel = @"Today from 00:00 to 24:00: screen activity, standing, and eye breaks";
     [view addSubview:self.timeline];
 
@@ -315,7 +321,9 @@ static BOOL mediaKeepsDisplayAwake(void) {
     self.trackingIcon.image = trackingImage;
     self.eyeLabel.stringValue = eye;
     self.standLabel.stringValue = stand;
-    self.dailyLabel.stringValue = daily;
+    self.timeline.standingGoal = [NSString stringWithFormat:@"STAND %@", [daily stringByReplacingOccurrencesOfString:@"Standing today: " withString:@""]];
+    self.timeline.toolTip = daily;
+    self.timeline.accessibilityLabel = [NSString stringWithFormat:@"Today from 00:00 to 24:00: screen activity, standing, and eye breaks. %@", daily];
     [self.timeline updateActivity:activeMinutes standing:standingMinutes eyeBreaks:eyeBreakMinutes count:eyeBreakCount currentMinute:currentMinute];
     self.eyeDue = [eye isEqualToString:@"Eye break due now"];
     self.standDue = [stand isEqualToString:@"Time to stand"];
