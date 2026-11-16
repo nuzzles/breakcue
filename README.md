@@ -13,7 +13,7 @@ open dist/BreakCue.dmg
 
 Drag `BreakCue.app` onto Applications in the DMG before enabling **Launch at login** in Settings. The packaging script applies a local ad hoc signature, which macOS requires for `SMAppService` registration. A build distributed to other Macs should use a Developer ID signature and notarization. The app has no Dock icon; use the menu bar eye icon to open it or quit.
 
-Each successful push to `main` runs formatting and Rust tests on macOS, builds and verifies the DMG, and publishes it as a GitHub release tagged with the `Cargo.toml` version and seven characters of the commit SHA (for example, `0.1.0-6b4951d`). CI builds are ad hoc signed and are not notarized. If Launch at login was enabled for screen_doctor, disable that old login item in macOS System Settings and enable it again in BreakCue Settings after installing BreakCue.
+CI runs formatting, `cargo check`, Clippy, and Rust tests on macOS for pushes to `main` and pull requests. A successful CI push to `main` triggers a separate workflow that builds and verifies the DMG, then publishes a GitHub release tagged with the `Cargo.toml` version and seven characters of the commit SHA (for example, `0.1.0-6b4951d`). CI builds are ad hoc signed and are not notarized. If Launch at login was enabled for screen_doctor, disable that old login item in macOS System Settings and enable it again in BreakCue Settings after installing BreakCue.
 
 Run `cargo test` to check the activity and break rules.
 

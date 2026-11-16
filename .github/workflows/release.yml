@@ -1,24 +1,28 @@
 name: Build and release
 
 on:
-  push:
+  workflow_run:
+    workflows: [CI]
     branches: [main]
+    types: [completed]
 
 permissions:
   contents: write
 
 jobs:
   macos:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: macos-latest
+    env:
+      RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt
-      - name: Check formatting
-        run: cargo fmt -- --check
-      - name: Test
-        run: cargo test --locked
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - uses: dtolnay/rust-toolchain@stable
       - name: Package DMG
         run: ./package.sh --locked
       - name: Verify package
@@ -31,8 +35,8 @@ jobs:
         run: |
           version="$(awk -F '"' '/^version = "/ { print $2; exit }' Cargo.toml)"
           test -n "$version"
-          tag="${version}-${GITHUB_SHA:0:7}"
+          tag="${version}-${RELEASE_SHA:0:7}"
           gh release create "$tag" dist/BreakCue.dmg \
-            --target "$GITHUB_SHA" \
+            --target "$RELEASE_SHA" \
             --title "BreakCue $tag" \
             --generate-notes

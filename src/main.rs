@@ -20,19 +20,14 @@ pub struct BCConfig {
     sound: u32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum ReminderSound {
     Off,
+    #[default]
     Glass,
     Ping,
     Pop,
-}
-
-impl Default for ReminderSound {
-    fn default() -> Self {
-        Self::Glass
-    }
 }
 
 impl ReminderSound {
