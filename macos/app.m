@@ -308,12 +308,12 @@ static BOOL mediaKeepsDisplayAwake(void) {
      eyeBreakMinutes:(const uint16_t *)eyeBreakMinutes
        eyeBreakCount:(NSUInteger)eyeBreakCount
        currentMinute:(uint16_t)currentMinute {
+    (void)media;
     NSButton *anchor = self.statusItem.button;
     NSString *symbol = active ? @"eye.fill" : @"eye.slash";
     NSImage *image = [NSImage imageWithSystemSymbolName:symbol accessibilityDescription:active ? @"screen_doctor tracking" : @"screen_doctor paused"];
     image.template = YES;
     anchor.image = image;
-    anchor.toolTip = active ? (media ? @"screen_doctor: tracking possible media playback" : @"screen_doctor: tracking activity") : @"screen_doctor: paused while away or screen locked";
     self.trackingLabel.stringValue = active ? @"Tracking" : @"Idle";
     NSImage *trackingImage = [NSImage imageWithSystemSymbolName:active ? @"eye.fill" : @"pause.circle"
                                               accessibilityDescription:active ? @"Tracking" : @"Idle"];
