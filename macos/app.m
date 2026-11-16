@@ -46,10 +46,8 @@ extern void bc_shutdown(void);
 @property (strong) NSTextField *eyeLabel;
 @property (strong) NSTextField *standLabel;
 @property (strong) BCTimelineView *timeline;
-@property (strong) NSButton *eyeStartButton;
 @property (strong) NSButton *eyeResetButton;
 @property (strong) NSButton *eyeSnoozeButton;
-@property (strong) NSButton *eyeDismissButton;
 @property (strong) NSButton *standStartButton;
 @property (strong) NSButton *standStopButton;
 @property (strong) NSButton *standSnoozeButton;
@@ -264,21 +262,19 @@ static BOOL mediaKeepsDisplayAwake(void) {
 
     self.eyeLabel = label(@"", NSMakeRect(18, 269, 146, 20), YES);
     [view addSubview:self.eyeLabel];
-    self.eyeStartButton = button(@"Start eye break", NSMakeRect(18, 267, 144, 28), self, @selector(performAction:), 3);
     self.eyeSnoozeButton = button(@"Snooze", NSMakeRect(170, 267, 72, 28), self, @selector(performAction:), 2);
-    self.eyeDismissButton = button(@"Dismiss", NSMakeRect(246, 267, 76, 28), self, @selector(performAction:), 1);
-    self.eyeResetButton = button(@"Reset eye timer", NSMakeRect(18, 233, 304, 28), self, @selector(performAction:), 4);
-    for (NSButton *control in @[self.eyeStartButton, self.eyeSnoozeButton, self.eyeDismissButton, self.eyeResetButton]) [view addSubview:control];
+    self.eyeResetButton = button(@"Reset", NSMakeRect(246, 267, 76, 28), self, @selector(performAction:), 4);
+    for (NSButton *control in @[self.eyeSnoozeButton, self.eyeResetButton]) [view addSubview:control];
 
-    self.standLabel = label(@"", NSMakeRect(18, 197, 146, 20), YES);
+    self.standLabel = label(@"", NSMakeRect(18, 222, 146, 20), YES);
     [view addSubview:self.standLabel];
-    self.standStartButton = button(@"Start standing", NSMakeRect(18, 155, 304, 28), self, @selector(performAction:), 5);
-    self.standStopButton = button(@"Stop standing", NSMakeRect(18, 155, 304, 28), self, @selector(performAction:), 6);
-    self.standSnoozeButton = button(@"Snooze", NSMakeRect(170, 195, 72, 28), self, @selector(performAction:), 7);
-    self.standDismissButton = button(@"Dismiss", NSMakeRect(246, 195, 76, 28), self, @selector(performAction:), 8);
+    self.standStartButton = button(@"Start standing", NSMakeRect(18, 180, 304, 28), self, @selector(performAction:), 5);
+    self.standStopButton = button(@"Stop standing", NSMakeRect(18, 180, 304, 28), self, @selector(performAction:), 6);
+    self.standSnoozeButton = button(@"Snooze", NSMakeRect(170, 220, 72, 28), self, @selector(performAction:), 7);
+    self.standDismissButton = button(@"Dismiss", NSMakeRect(246, 220, 76, 28), self, @selector(performAction:), 8);
     for (NSButton *control in @[self.standStartButton, self.standStopButton, self.standSnoozeButton, self.standDismissButton]) [view addSubview:control];
 
-    self.timeline = [[BCTimelineView alloc] initWithFrame:NSMakeRect(8, 48, 320, 93)];
+    self.timeline = [[BCTimelineView alloc] initWithFrame:NSMakeRect(8, 63, 320, 93)];
     self.timeline.accessibilityLabel = @"Today from 00:00 to 24:00: screen activity, standing, pink eye breaks, and red eye timer resets";
     [view addSubview:self.timeline];
 
@@ -341,13 +337,13 @@ static BOOL mediaKeepsDisplayAwake(void) {
     self.timeline.toolTip = daily;
     self.timeline.accessibilityLabel = [NSString stringWithFormat:@"Today from 00:00 to 24:00: screen activity, standing, pink eye breaks, and red eye timer resets. %@", daily];
     [self.timeline updateActivity:activeMinutes standing:standingMinutes eyeBreaks:eyeBreakMinutes breakCount:eyeBreakCount eyeResets:eyeResetMinutes resetCount:eyeResetCount currentMinute:currentMinute];
-    self.eyeDue = [eye isEqualToString:@"Eye break due now"];
-    self.standDue = [stand isEqualToString:@"Time to stand"];
+    self.eyeDue = [eye isEqualToString:@"Eye break in 0:00"];
+    self.standDue = [stand isEqualToString:@"Stand in 0:00"];
     self.standing = standing;
-    self.eyeStartButton.hidden = !self.eyeDue;
-    self.eyeLabel.hidden = self.eyeDue;
+    self.eyeLabel.textColor = self.eyeDue ? NSColor.systemRedColor : NSColor.labelColor;
+    self.standLabel.textColor = self.standDue ? NSColor.systemRedColor : NSColor.labelColor;
     self.eyeSnoozeButton.enabled = self.eyeDue;
-    self.eyeDismissButton.enabled = self.eyeDue;
+    self.eyeResetButton.enabled = self.eyeDue;
     self.standStartButton.hidden = standing;
     self.standStopButton.hidden = !standing;
     self.standSnoozeButton.enabled = self.standDue;

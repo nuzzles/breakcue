@@ -317,12 +317,16 @@ impl Engine {
                 self.save_day();
             }
             4 => {
-                // Restart the eye interval, including a due or snoozed reminder.
+                // A due reset records the self-reported break and restarts the interval.
+                let completed_break = self.eye_due;
                 self.eye_due = false;
                 self.eye_active_seconds = 0;
                 self.eye_snoozed_until = None;
                 self.eye_break_start = None;
                 let minute = (Local::now().time().num_seconds_from_midnight() / 60) as u16;
+                if completed_break {
+                    self.day.eye_break_minutes.push(minute);
+                }
                 self.day.eye_reset_minutes.push(minute);
                 self.save_day();
             }
@@ -527,7 +531,7 @@ fn present(e: &Engine, reminder: u8) {
             20_u64.saturating_sub(start.elapsed().as_secs())
         )
     } else if e.eye_due {
-        "Eye break due now".to_owned()
+        "Eye break in 0:00".to_owned()
     } else {
         let left = (e.config.eye_minutes as u64 * 60).saturating_sub(e.eye_active_seconds);
         format!("Eye break in {}", countdown(left))
@@ -535,7 +539,7 @@ fn present(e: &Engine, reminder: u8) {
     let stand = if e.standing {
         format!("Standing: {} min", e.standing_seconds / 60)
     } else if e.stand_due {
-        "Time to stand".to_owned()
+        "Stand in 0:00".to_owned()
     } else {
         let left = (e.config.stand_minutes as u64 * 60).saturating_sub(e.stand_active_seconds);
         format!("Stand in {}", countdown(left))
@@ -766,9 +770,10 @@ mod tests {
     #[test]
     fn eye_break_finishes_after_twenty_seconds() {
         let mut e = Engine::load();
+        let previous_breaks = e.day.eye_break_minutes.len();
         e.eye_due = true;
         e.action(3);
-        assert_eq!(e.day.eye_break_minutes.len(), 1);
+        assert_eq!(e.day.eye_break_minutes.len(), previous_breaks + 1);
         e.tick(0.0, true, false);
         assert!(e.eye_break_start.is_some());
         e.eye_break_start = Some(Instant::now() - Duration::from_secs(20));
@@ -851,7 +856,7 @@ mod tests {
         assert!(e.eye_snoozed_until.is_none());
         assert_eq!(e.day.eye_reset_minutes.len(), previous_resets + 1);
         assert!(e.day.eye_reset_minutes.last().unwrap() < &1440);
-        assert_eq!(e.day.eye_break_minutes.len(), previous_breaks);
+        assert_eq!(e.day.eye_break_minutes.len(), previous_breaks + 1);
     }
 
     #[test]
