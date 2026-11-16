@@ -320,7 +320,7 @@ impl Engine {
                 self.save_day();
             }
             4 => {
-                // A due reset records the self-reported break and restarts the interval.
+                // Reset the interval at any time; a due reset also records a break.
                 let completed_break = self.eye_due;
                 self.eye_due = false;
                 self.eye_active_seconds = 0;
