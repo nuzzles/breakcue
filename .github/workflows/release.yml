@@ -1,0 +1,36 @@
+name: Build and release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Check formatting
+        run: cargo fmt -- --check
+      - name: Test
+        run: cargo test --locked
+      - name: Package DMG
+        run: ./package.sh --locked
+      - name: Verify package
+        run: |
+          codesign --verify --deep --strict dist/BreakCue.app
+          hdiutil verify dist/BreakCue.dmg
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="main-${GITHUB_RUN_NUMBER}"
+          gh release create "$tag" dist/BreakCue.dmg \
+            --target "$GITHUB_SHA" \
+            --title "BreakCue $tag" \
+            --generate-notes
