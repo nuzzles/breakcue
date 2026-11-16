@@ -1,0 +1,11 @@
+# Active computer use before each reminder.
+eye_minutes = 20
+stand_minutes = 120
+
+# Self-reported standing goal for each local day.
+daily_stand_minutes = 60
+snooze_minutes = 5
+idle_seconds = 120
+
+# Treat a macOS display-awake power assertion as possible media playback.
+count_media = true

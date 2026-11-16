@@ -1,10 +1,10 @@
 use chrono::{Local, NaiveDate, Timelike};
 use serde::{Deserialize, Serialize};
 use std::{
-    ffi::CString,
+    ffi::{CStr, CString},
     fs,
     os::raw::{c_char, c_int},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Mutex, OnceLock},
     time::{Duration, Instant},
 };
@@ -35,7 +35,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             eye_minutes: 20,
-            stand_minutes: 60,
+            stand_minutes: 120,
             daily_stand_minutes: 60,
             snooze_minutes: 5,
             idle_seconds: 120,
@@ -105,6 +105,7 @@ fn credit_minutes(buckets: &mut [u8], end_second: u32, seconds: u64) {
 
 struct Engine {
     config: Config,
+    settings_path: PathBuf,
     day: DayRecord,
     last_tick: Instant,
     last_save: Instant,
@@ -124,7 +125,19 @@ struct Engine {
 
 impl Engine {
     fn load() -> Self {
-        let config = load_json("config.json").unwrap_or_default();
+        let settings_path = selected_settings_path();
+        let config = load_settings(&settings_path).unwrap_or_else(|| {
+            // Preserve settings from earlier releases when creating the new TOML file.
+            let config = if settings_path == default_settings_path() {
+                load_json("config.json").unwrap_or_else(bundled_settings)
+            } else {
+                bundled_settings()
+            };
+            if !settings_path.exists() {
+                save_settings(&settings_path, &config);
+            }
+            config
+        });
         let today = Local::now().date_naive();
         let day: DayRecord = load_json("day.json").unwrap_or_else(|| DayRecord::new(today));
         let mut day = if day.date == today {
@@ -136,6 +149,7 @@ impl Engine {
         let now = Instant::now();
         Self {
             config,
+            settings_path,
             day,
             last_tick: now,
             last_save: now,
@@ -290,12 +304,12 @@ impl Engine {
                 self.standing_seconds = 0;
                 self.save_day();
             }
-            7 => {
+            7 if self.stand_due => {
                 // Standing: snooze.
                 self.stand_due = false;
                 self.stand_snoozed_until = Some(Instant::now() + snooze);
             }
-            8 => {
+            8 if self.stand_due => {
                 // Standing: dismiss this cycle.
                 self.stand_due = false;
                 self.stand_active_seconds = 0;
@@ -317,6 +331,58 @@ impl Engine {
 fn app_dir() -> PathBuf {
     let home = std::env::var_os("HOME").unwrap_or_default();
     PathBuf::from(home).join("Library/Application Support/screen_doctor")
+}
+
+fn default_settings_path() -> PathBuf {
+    app_dir().join("settings.toml")
+}
+
+fn selected_settings_path() -> PathBuf {
+    let mut args = std::env::args_os().skip(1);
+    while let Some(arg) = args.next() {
+        if arg == "--settings" {
+            if let Some(path) = args.next() {
+                return PathBuf::from(path);
+            }
+        }
+    }
+    if let Some(path) = std::env::var_os("SCREEN_DOCTOR_SETTINGS").filter(|path| !path.is_empty()) {
+        return PathBuf::from(path);
+    }
+    fs::read_to_string(app_dir().join("settings-path.txt"))
+        .ok()
+        .map(|path| PathBuf::from(path.trim()))
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(default_settings_path)
+}
+
+fn bundled_settings() -> Config {
+    toml::from_str(include_str!("../settings.toml")).expect("valid bundled settings")
+}
+
+fn load_settings(path: &Path) -> Option<Config> {
+    let contents = fs::read_to_string(path).ok()?;
+    match toml::from_str::<Config>(&contents) {
+        Ok(config) => Some(config),
+        Err(error) => {
+            eprintln!("Invalid settings file {}: {error}", path.display());
+            None
+        }
+    }
+}
+
+fn save_settings(path: &Path, config: &Config) -> bool {
+    let Ok(contents) = toml::to_string_pretty(config) else {
+        return false;
+    };
+    let Some(parent) = path.parent() else {
+        return false;
+    };
+    if fs::create_dir_all(parent).is_err() {
+        return false;
+    }
+    let temporary = path.with_extension("toml.tmp");
+    fs::write(&temporary, contents).is_ok() && fs::rename(temporary, path).is_ok()
 }
 
 fn load_json<T: serde::de::DeserializeOwned>(name: &str) -> Option<T> {
@@ -362,7 +428,7 @@ extern "C" {
 fn present(e: &Engine, reminder: u8) {
     let eye = if let Some(start) = e.eye_break_start {
         format!(
-            "Look 20 feet away: {}s left",
+            "Look away: {}s left",
             20_u64.saturating_sub(start.elapsed().as_secs())
         )
     } else if e.eye_due {
@@ -372,15 +438,12 @@ fn present(e: &Engine, reminder: u8) {
         format!("Eye break in {} min", left.div_ceil(60))
     };
     let stand = if e.standing {
-        format!(
-            "Standing: {} min (max 30 min/session)",
-            e.standing_seconds / 60
-        )
+        format!("Standing: {} min", e.standing_seconds / 60)
     } else if e.stand_due {
         "Time to stand".to_owned()
     } else {
         let left = (e.config.stand_minutes as u64 * 60).saturating_sub(e.stand_active_seconds);
-        format!("Stand reminder in {} min", left.div_ceil(60))
+        format!("Stand in {} min", left.div_ceil(60))
     };
     let daily = format!(
         "Standing today: {} / {} min",
@@ -438,8 +501,63 @@ extern "C" fn sd_apply_config(config: SDConfig) {
         idle_seconds: config.idle_seconds.clamp(15, 900),
         count_media: config.count_media,
     };
-    save_json("config.json", &e.config);
+    save_settings(&e.settings_path, &e.config);
     present(&e, 0);
+}
+
+#[no_mangle]
+extern "C" fn sd_settings_path() -> *mut c_char {
+    let e = engine().lock().unwrap();
+    CString::new(e.settings_path.to_string_lossy().as_bytes())
+        .unwrap()
+        .into_raw()
+}
+
+#[no_mangle]
+unsafe extern "C" fn sd_free_string(value: *mut c_char) {
+    if !value.is_null() {
+        drop(CString::from_raw(value));
+    }
+}
+
+#[no_mangle]
+unsafe extern "C" fn sd_use_settings_file(path: *const c_char) -> bool {
+    if path.is_null() {
+        return false;
+    }
+    let Ok(path) = CStr::from_ptr(path).to_str() else {
+        return false;
+    };
+    let path = PathBuf::from(path);
+    let config = if path == default_settings_path() && !path.exists() {
+        let config = bundled_settings();
+        if !save_settings(&path, &config) {
+            return false;
+        }
+        config
+    } else {
+        let Some(config) = load_settings(&path) else {
+            return false;
+        };
+        config
+    };
+    let selection = app_dir().join("settings-path.txt");
+    if path == default_settings_path() {
+        if selection.exists() && fs::remove_file(selection).is_err() {
+            return false;
+        }
+    } else {
+        if fs::create_dir_all(app_dir()).is_err()
+            || fs::write(selection, path.to_string_lossy().as_bytes()).is_err()
+        {
+            return false;
+        }
+    }
+    let mut e = engine().lock().unwrap();
+    e.config = config;
+    e.settings_path = path;
+    present(&e, 0);
+    true
 }
 
 #[no_mangle]
@@ -519,5 +637,26 @@ mod tests {
         e.action(2);
         assert_eq!(e.eye_active_seconds, 45);
         assert!(e.eye_snoozed_until.is_none());
+    }
+
+    #[test]
+    fn bundled_settings_use_two_hour_standing_interval() {
+        let config = bundled_settings();
+        assert_eq!(config.stand_minutes, 120);
+        assert_eq!(Config::default().stand_minutes, 120);
+    }
+
+    #[test]
+    fn standing_actions_require_a_due_reminder() {
+        let mut e = Engine::load();
+        e.stand_active_seconds = 300;
+        e.action(7);
+        e.action(8);
+        assert_eq!(e.stand_active_seconds, 300);
+        assert!(e.stand_snoozed_until.is_none());
+        e.stand_due = true;
+        e.action(8);
+        assert_eq!(e.stand_active_seconds, 0);
+        assert!(!e.stand_due);
     }
 }

@@ -16,6 +16,9 @@ extern void sd_tick(double idle_seconds, bool screen_ready, bool media_assertion
 extern void sd_action(int action);
 extern SDConfig sd_config(void);
 extern void sd_apply_config(SDConfig config);
+extern char *sd_settings_path(void);
+extern void sd_free_string(char *value);
+extern bool sd_use_settings_file(const char *path);
 extern void sd_shutdown(void);
 
 @interface SDTimelineView : NSView
@@ -48,6 +51,7 @@ extern void sd_shutdown(void);
 @property (strong) NSButton *standSnoozeButton;
 @property (strong) NSButton *standDismissButton;
 @property (strong) NSArray<NSTextField *> *settingsFields;
+@property (strong) NSTextField *settingsPathLabel;
 @property (strong) NSButton *mediaCheckbox;
 @property (strong) NSButton *startupCheckbox;
 @property (strong) id localMouseMonitor;
@@ -224,33 +228,33 @@ static BOOL mediaKeepsDisplayAwake(void) {
     NSTextField *title = label(@"Screen Doctor", NSMakeRect(18, 297, 180, 23), YES);
     title.font = [NSFont boldSystemFontOfSize:15];
     [view addSubview:title];
-    self.trackingLabel = label(@"Idle", NSMakeRect(218, 298, 79, 20), NO);
+    self.trackingLabel = label(@"Idle", NSMakeRect(218, 299, 79, 20), NO);
     self.trackingLabel.alignment = NSTextAlignmentRight;
     NSFontDescriptor *italic = [[NSFont systemFontOfSize:12].fontDescriptor fontDescriptorWithSymbolicTraits:NSFontDescriptorTraitItalic];
     self.trackingLabel.font = [NSFont fontWithDescriptor:italic size:12] ?: [NSFont systemFontOfSize:12];
     self.trackingLabel.textColor = NSColor.secondaryLabelColor;
     [view addSubview:self.trackingLabel];
-    self.trackingIcon = [[NSImageView alloc] initWithFrame:NSMakeRect(304, 300, 15, 15)];
+    self.trackingIcon = [[NSImageView alloc] initWithFrame:NSMakeRect(304, 301, 15, 15)];
     [view addSubview:self.trackingIcon];
     NSBox *separator = [[NSBox alloc] initWithFrame:NSMakeRect(18, 286, 304, 1)];
     separator.boxType = NSBoxSeparator;
     [view addSubview:separator];
 
-    self.eyeLabel = label(@"", NSMakeRect(18, 258, 300, 20), YES);
+    self.eyeLabel = label(@"", NSMakeRect(18, 244, 146, 20), YES);
     [view addSubview:self.eyeLabel];
-    self.eyeStartButton = button(@"Start 20-second look", NSMakeRect(18, 226, 144, 28), self, @selector(performAction:), 3);
-    self.eyeSnoozeButton = button(@"Snooze", NSMakeRect(170, 226, 72, 28), self, @selector(performAction:), 2);
-    self.eyeDismissButton = button(@"Dismiss", NSMakeRect(246, 226, 76, 28), self, @selector(performAction:), 1);
+    self.eyeStartButton = button(@"Start eye break", NSMakeRect(18, 239, 144, 28), self, @selector(performAction:), 3);
+    self.eyeSnoozeButton = button(@"Snooze", NSMakeRect(170, 239, 72, 28), self, @selector(performAction:), 2);
+    self.eyeDismissButton = button(@"Dismiss", NSMakeRect(246, 239, 76, 28), self, @selector(performAction:), 1);
     for (NSButton *control in @[self.eyeStartButton, self.eyeSnoozeButton, self.eyeDismissButton]) [view addSubview:control];
 
-    self.standLabel = label(@"", NSMakeRect(18, 195, 300, 20), YES);
+    self.standLabel = label(@"", NSMakeRect(18, 198, 146, 20), YES);
     [view addSubview:self.standLabel];
-    self.dailyLabel = label(@"", NSMakeRect(18, 176, 300, 18), NO);
+    self.dailyLabel = label(@"", NSMakeRect(18, 174, 300, 18), NO);
     [view addSubview:self.dailyLabel];
-    self.standStartButton = button(@"Start standing", NSMakeRect(18, 144, 126, 28), self, @selector(performAction:), 5);
-    self.standStopButton = button(@"Stop standing", NSMakeRect(18, 144, 126, 28), self, @selector(performAction:), 6);
-    self.standSnoozeButton = button(@"Snooze", NSMakeRect(170, 144, 72, 28), self, @selector(performAction:), 7);
-    self.standDismissButton = button(@"Dismiss", NSMakeRect(246, 144, 76, 28), self, @selector(performAction:), 8);
+    self.standStartButton = button(@"Start standing", NSMakeRect(18, 140, 126, 28), self, @selector(performAction:), 5);
+    self.standStopButton = button(@"Stop standing", NSMakeRect(18, 140, 126, 28), self, @selector(performAction:), 6);
+    self.standSnoozeButton = button(@"Snooze", NSMakeRect(170, 193, 72, 28), self, @selector(performAction:), 7);
+    self.standDismissButton = button(@"Dismiss", NSMakeRect(246, 193, 76, 28), self, @selector(performAction:), 8);
     for (NSButton *control in @[self.standStartButton, self.standStopButton, self.standSnoozeButton, self.standDismissButton]) [view addSubview:control];
 
     self.timeline = [[SDTimelineView alloc] initWithFrame:NSMakeRect(8, 39, 320, 93)];
@@ -317,12 +321,13 @@ static BOOL mediaKeepsDisplayAwake(void) {
     self.standDue = [stand isEqualToString:@"Time to stand"];
     self.standing = standing;
     self.eyeStartButton.hidden = !self.eyeDue;
+    self.eyeLabel.hidden = self.eyeDue;
     self.eyeSnoozeButton.enabled = self.eyeDue;
     self.eyeDismissButton.enabled = self.eyeDue;
     self.standStartButton.hidden = standing;
     self.standStopButton.hidden = !standing;
-    self.standSnoozeButton.hidden = !self.standDue;
-    self.standDismissButton.hidden = !self.standDue;
+    self.standSnoozeButton.enabled = self.standDue;
+    self.standDismissButton.enabled = self.standDue;
     if (reminder != 0 && !self.popover.isShown) [self showPopover];
 }
 
@@ -334,7 +339,7 @@ static BOOL mediaKeepsDisplayAwake(void) {
         [NSApp activateIgnoringOtherApps:YES];
         return;
     }
-    NSWindow *window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 420, 352)
+    NSWindow *window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 420, 430)
                                                      styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
                                                        backing:NSBackingStoreBuffered defer:NO];
     window.title = @"screen_doctor Settings";
@@ -345,7 +350,7 @@ static BOOL mediaKeepsDisplayAwake(void) {
     uint32_t values[] = {config.eye_minutes, config.stand_minutes, config.daily_stand_minutes, config.snooze_minutes, config.idle_seconds};
     NSMutableArray<NSTextField *> *fields = [NSMutableArray array];
     for (int i = 0; i < 5; i++) {
-        CGFloat y = 304 - 43 * i;
+        CGFloat y = 382 - 43 * i;
         [view addSubview:label(names[i], NSMakeRect(18, y, 277, 20), NO)];
         NSTextField *field = [[NSTextField alloc] initWithFrame:NSMakeRect(304, y - 2, 90, 24)];
         field.integerValue = values[i];
@@ -354,18 +359,72 @@ static BOOL mediaKeepsDisplayAwake(void) {
     }
     self.settingsFields = fields;
     self.mediaCheckbox = [NSButton checkboxWithTitle:@"Count display-awake media playback as activity" target:nil action:nil];
-    self.mediaCheckbox.frame = NSMakeRect(18, 78, 380, 22);
+    self.mediaCheckbox.frame = NSMakeRect(18, 160, 380, 22);
     self.mediaCheckbox.state = config.count_media ? NSControlStateValueOn : NSControlStateValueOff;
     [view addSubview:self.mediaCheckbox];
     self.startupCheckbox = [NSButton checkboxWithTitle:@"Launch at login" target:nil action:nil];
-    self.startupCheckbox.frame = NSMakeRect(18, 49, 380, 22);
+    self.startupCheckbox.frame = NSMakeRect(18, 131, 380, 22);
     self.startupCheckbox.state = SMAppService.mainAppService.status == SMAppServiceStatusEnabled ? NSControlStateValueOn : NSControlStateValueOff;
     [view addSubview:self.startupCheckbox];
+    [view addSubview:label(@"Settings file", NSMakeRect(18, 104, 380, 19), YES)];
+    self.settingsPathLabel = label(@"", NSMakeRect(18, 83, 380, 19), NO);
+    self.settingsPathLabel.textColor = NSColor.secondaryLabelColor;
+    [view addSubview:self.settingsPathLabel];
+    [view addSubview:button(@"Choose…", NSMakeRect(18, 46, 100, 28), self, @selector(chooseSettingsFile:), 0)];
+    [view addSubview:button(@"Use Default", NSMakeRect(124, 46, 110, 28), self, @selector(useDefaultSettingsFile:), 0)];
+    [self refreshSettingsPath];
     [view addSubview:button(@"Save", NSMakeRect(304, 12, 90, 29), self, @selector(saveSettings:), 0)];
     [window center];
     self.settingsWindow = window;
     [window makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
+}
+
+- (void)refreshSettingsPath {
+    char *path = sd_settings_path();
+    self.settingsPathLabel.stringValue = path ? [NSString stringWithUTF8String:path] : @"";
+    self.settingsPathLabel.toolTip = self.settingsPathLabel.stringValue;
+    sd_free_string(path);
+}
+
+- (void)showInvalidSettingsFile {
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = @"Could not open settings file";
+    alert.informativeText = @"Choose an existing, readable settings.toml with valid settings.";
+    [alert beginSheetModalForWindow:self.settingsWindow completionHandler:nil];
+}
+
+- (void)refreshSettingsValues {
+    SDConfig config = sd_config();
+    uint32_t values[] = {config.eye_minutes, config.stand_minutes, config.daily_stand_minutes, config.snooze_minutes, config.idle_seconds};
+    for (int i = 0; i < 5; i++) self.settingsFields[i].integerValue = values[i];
+    self.mediaCheckbox.state = config.count_media ? NSControlStateValueOn : NSControlStateValueOff;
+    [self refreshSettingsPath];
+}
+
+- (void)chooseSettingsFile:(id)sender {
+    (void)sender;
+    NSOpenPanel *panel = [NSOpenPanel openPanel];
+    panel.canChooseDirectories = NO;
+    panel.canChooseFiles = YES;
+    [panel beginSheetModalForWindow:self.settingsWindow completionHandler:^(NSModalResponse result) {
+        if (result != NSModalResponseOK) return;
+        if (!sd_use_settings_file(panel.URL.path.UTF8String)) {
+            [self showInvalidSettingsFile];
+            return;
+        }
+        [self refreshSettingsValues];
+    }];
+}
+
+- (void)useDefaultSettingsFile:(id)sender {
+    (void)sender;
+    NSString *path = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/screen_doctor/settings.toml"];
+    if (!sd_use_settings_file(path.UTF8String)) {
+        [self showInvalidSettingsFile];
+        return;
+    }
+    [self refreshSettingsValues];
 }
 
 - (void)saveSettings:(id)sender {
