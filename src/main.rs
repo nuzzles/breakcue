@@ -17,7 +17,33 @@ pub struct BCConfig {
     daily_stand_minutes: u32,
     snooze_minutes: u32,
     idle_seconds: u32,
-    count_media: bool,
+    sound: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum ReminderSound {
+    Off,
+    Glass,
+    Ping,
+    Pop,
+}
+
+impl Default for ReminderSound {
+    fn default() -> Self {
+        Self::Glass
+    }
+}
+
+impl ReminderSound {
+    fn from_index(index: u32) -> Self {
+        match index {
+            0 => Self::Off,
+            2 => Self::Ping,
+            3 => Self::Pop,
+            _ => Self::Glass,
+        }
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -28,7 +54,7 @@ struct Config {
     daily_stand_minutes: u32,
     snooze_minutes: u32,
     idle_seconds: u32,
-    count_media: bool,
+    reminder_sound: ReminderSound,
 }
 
 impl Default for Config {
@@ -39,7 +65,7 @@ impl Default for Config {
             daily_stand_minutes: 60,
             snooze_minutes: 5,
             idle_seconds: 120,
-            count_media: true,
+            reminder_sound: ReminderSound::Glass,
         }
     }
 }
@@ -52,7 +78,7 @@ impl Config {
             daily_stand_minutes: self.daily_stand_minutes,
             snooze_minutes: self.snooze_minutes,
             idle_seconds: self.idle_seconds,
-            count_media: self.count_media,
+            sound: self.reminder_sound as u32,
         }
     }
 }
@@ -67,6 +93,8 @@ struct DayRecord {
     standing_seconds_by_minute: Vec<u8>,
     #[serde(default)]
     eye_break_minutes: Vec<u16>,
+    #[serde(default)]
+    eye_reset_minutes: Vec<u16>,
 }
 
 impl DayRecord {
@@ -77,6 +105,7 @@ impl DayRecord {
             active_seconds_by_minute: vec![0; 1440],
             standing_seconds_by_minute: vec![0; 1440],
             eye_break_minutes: Vec::new(),
+            eye_reset_minutes: Vec::new(),
         }
     }
 
@@ -86,6 +115,7 @@ impl DayRecord {
         self.standing_seconds_by_minute.resize(1440, 0);
         self.standing_seconds_by_minute.truncate(1440);
         self.eye_break_minutes.retain(|minute| *minute < 1440);
+        self.eye_reset_minutes.retain(|minute| *minute < 1440);
     }
 }
 
@@ -119,7 +149,6 @@ struct Engine {
     standing_seconds: u64,
     standing: bool,
     active: bool,
-    media_active: bool,
     shown_reminder: u8,
 }
 
@@ -166,7 +195,6 @@ impl Engine {
             standing_seconds: 0,
             standing: false,
             active: false,
-            media_active: false,
             shown_reminder: 0,
         }
     }
@@ -200,10 +228,9 @@ impl Engine {
             self.eye_snoozed_until = None;
         }
 
-        self.media_active = screen_ready && self.config.count_media && media_assertion;
         self.active = screen_ready
             && (idle_seconds.is_finite() && idle_seconds <= self.config.idle_seconds as f64
-                || self.media_active);
+                || media_assertion);
 
         // A deliberate standing session can continue while the user steps away
         // and the display dims. The 30-minute cap limits forgotten sessions.
@@ -292,6 +319,7 @@ impl Engine {
                 self.eye_break_start = Some(Instant::now());
                 let minute = (Local::now().time().num_seconds_from_midnight() / 60) as u16;
                 self.day.eye_break_minutes.push(minute);
+                self.save_day();
             }
             4 => {
                 // Restart the eye interval, including a due or snoozed reminder.
@@ -299,6 +327,9 @@ impl Engine {
                 self.eye_active_seconds = 0;
                 self.eye_snoozed_until = None;
                 self.eye_break_start = None;
+                let minute = (Local::now().time().num_seconds_from_midnight() / 60) as u16;
+                self.day.eye_reset_minutes.push(minute);
+                self.save_day();
             }
             5 => {
                 // Start a self-reported standing session.
@@ -478,8 +509,8 @@ extern "C" {
     fn bc_app_run();
     fn bc_present(
         active: bool,
-        media: bool,
         reminder: u8,
+        sound: u32,
         eye: *const c_char,
         stand: *const c_char,
         daily: *const c_char,
@@ -488,6 +519,8 @@ extern "C" {
         standing_minutes: *const u8,
         eye_break_minutes: *const u16,
         eye_break_count: usize,
+        eye_reset_minutes: *const u16,
+        eye_reset_count: usize,
         current_minute: u16,
     );
 }
@@ -523,8 +556,8 @@ fn present(e: &Engine, reminder: u8) {
     unsafe {
         bc_present(
             e.active,
-            e.media_active,
             reminder,
+            e.config.reminder_sound as u32,
             eye.as_ptr(),
             stand.as_ptr(),
             daily.as_ptr(),
@@ -533,6 +566,8 @@ fn present(e: &Engine, reminder: u8) {
             e.day.standing_seconds_by_minute.as_ptr(),
             e.day.eye_break_minutes.as_ptr(),
             e.day.eye_break_minutes.len(),
+            e.day.eye_reset_minutes.as_ptr(),
+            e.day.eye_reset_minutes.len(),
             (Local::now().time().num_seconds_from_midnight() / 60) as u16,
         );
     }
@@ -570,7 +605,7 @@ extern "C" fn bc_apply_config(config: BCConfig) {
         daily_stand_minutes: config.daily_stand_minutes.clamp(1, 480),
         snooze_minutes: config.snooze_minutes.clamp(1, 60),
         idle_seconds: config.idle_seconds.clamp(15, 900),
-        count_media: config.count_media,
+        reminder_sound: ReminderSound::from_index(config.sound),
     };
     save_settings(&e.settings_path, &e.config);
     present(&e, 0);
@@ -715,16 +750,22 @@ mod tests {
     }
 
     #[test]
-    fn idle_video_counts_only_with_media_enabled_and_awake_screen() {
+    fn idle_video_counts_when_screen_is_awake() {
         let mut e = Engine::load();
-        e.config.count_media = true;
         e.tick(1_000.0, true, true);
         assert!(e.active);
         e.tick(1_000.0, false, true);
         assert!(!e.active);
-        e.config.count_media = false;
-        e.tick(1_000.0, true, true);
+        e.tick(1_000.0, true, false);
         assert!(!e.active);
+    }
+
+    #[test]
+    fn old_media_setting_is_ignored_and_sound_defaults_to_glass() {
+        let config: Config = toml::from_str("count_media = false\n").unwrap();
+        assert_eq!(config.reminder_sound, ReminderSound::Glass);
+        assert!(!toml::to_string(&config).unwrap().contains("count_media"));
+        assert_eq!(ReminderSound::from_index(3), ReminderSound::Pop);
     }
 
     #[test]
@@ -767,6 +808,7 @@ mod tests {
         assert_eq!(day.standing_seconds, 3600);
         assert_eq!(day.active_seconds_by_minute.len(), 1440);
         assert!(day.eye_break_minutes.is_empty());
+        assert!(day.eye_reset_minutes.is_empty());
     }
 
     #[test]
@@ -803,6 +845,8 @@ mod tests {
     #[test]
     fn reset_eye_timer_clears_due_and_snoozed_state() {
         let mut e = Engine::load();
+        let previous_resets = e.day.eye_reset_minutes.len();
+        let previous_breaks = e.day.eye_break_minutes.len();
         e.eye_active_seconds = 600;
         e.eye_due = true;
         e.eye_snoozed_until = Some(Instant::now() + Duration::from_secs(300));
@@ -810,6 +854,9 @@ mod tests {
         assert_eq!(e.eye_active_seconds, 0);
         assert!(!e.eye_due);
         assert!(e.eye_snoozed_until.is_none());
+        assert_eq!(e.day.eye_reset_minutes.len(), previous_resets + 1);
+        assert!(e.day.eye_reset_minutes.last().unwrap() < &1440);
+        assert_eq!(e.day.eye_break_minutes.len(), previous_breaks);
     }
 
     #[test]
