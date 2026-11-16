@@ -52,6 +52,8 @@ extern void bc_shutdown(void);
 @property (assign) BOOL menuOpen;
 @property (assign) BOOL menuPositioned;
 @property (assign) BOOL openingReminder;
+@property (assign) BOOL quitting;
+@property (assign) BOOL terminationQueued;
 @property (assign) NSPoint reminderLocation;
 @property (strong) NSView *menuContent;
 @property (strong) NSPanel *caretWindow;
@@ -272,6 +274,28 @@ static BOOL mediaKeepsDisplayAwake(void) {
     bc_shutdown();
 }
 
+- (void)quitBreakCue:(id)sender {
+    (void)sender;
+    if (self.quitting) return;
+    self.quitting = YES;
+    if (self.menuOpen) {
+        // Finish AppKit's menu tracking loop before terminating the app. That
+        // loop owns keyboard and mouse routing while the tray menu is open.
+        [self.menu cancelTracking];
+    } else {
+        [NSApp terminate:nil];
+    }
+}
+
+- (void)menuDidEndTracking:(NSNotification *)notification {
+    (void)notification;
+    if (!self.quitting || self.terminationQueued) return;
+    self.terminationQueued = YES;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [NSApp terminate:nil];
+    });
+}
+
 - (void)menuWillOpen:(NSMenu *)menu {
     (void)menu;
     self.menuOpen = YES;
@@ -387,10 +411,12 @@ static BOOL mediaKeepsDisplayAwake(void) {
     [view addSubview:self.timeline];
 
     [view addSubview:button(@"Settings…", NSMakeRect(18, 7, 100, 28), self, @selector(openSettings:), 0)];
-    [view addSubview:button(@"Quit", NSMakeRect(250, 7, 72, 28), NSApp, @selector(terminate:), 0)];
+    [view addSubview:button(@"Quit", NSMakeRect(250, 7, 72, 28), self, @selector(quitBreakCue:), 0)];
 
     self.menu = [[NSMenu alloc] initWithTitle:@"BreakCue"];
     self.menu.delegate = self;
+    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(menuDidEndTracking:)
+                                             name:NSMenuDidEndTrackingNotification object:self.menu];
     NSMenuItem *content = [[NSMenuItem alloc] initWithTitle:@"" action:nil keyEquivalent:@""];
     self.menuContent = view;
     content.view = view;
@@ -399,6 +425,7 @@ static BOOL mediaKeepsDisplayAwake(void) {
 }
 
 - (void)updateActivity {
+    if (self.quitting) return;
     double idle = CGEventSourceSecondsSinceLastEventType(kCGEventSourceStateCombinedSessionState, kCGAnyInputEventType);
     bc_tick(idle, screenReady(), mediaKeepsDisplayAwake());
 }
