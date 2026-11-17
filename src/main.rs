@@ -573,55 +573,86 @@ extern "C" {
     );
 }
 
-fn present(e: &Engine, reminder: u8) {
-    let eye = if let Some(start) = e.eye_break_start {
-        format!(
-            "Look away: {}s left",
-            20_u64.saturating_sub(start.elapsed().as_secs())
-        )
-    } else if e.eye_due {
-        "Eye break in 0:00".to_owned()
-    } else if let Some(until) = e.eye_snoozed_until {
-        format!("Eye break in {}", countdown(seconds_until(until)))
-    } else {
-        let left = (e.config.eye_minutes as u64 * 60).saturating_sub(e.eye_active_seconds);
-        format!("Eye break in {}", countdown(left))
-    };
-    let stand = if e.standing {
-        format!("Standing: {} min", e.standing_seconds / 60)
-    } else if e.stand_due {
-        "Stand in 0:00".to_owned()
-    } else if let Some(until) = e.stand_snoozed_until {
-        format!("Stand in {}", countdown(seconds_until(until)))
-    } else {
-        let left = (e.config.stand_minutes as u64 * 60).saturating_sub(e.stand_active_seconds);
-        format!("Stand in {}", countdown(left))
-    };
-    let daily = format!(
-        "Standing today: {} / {} min",
-        e.day.standing_seconds / 60,
-        e.config.daily_stand_minutes
-    );
-    let eye = CString::new(eye).unwrap();
-    let stand = CString::new(stand).unwrap();
-    let daily = CString::new(daily).unwrap();
-    unsafe {
-        bc_present(
-            e.active,
-            reminder,
-            e.config.reminder_sound as u32,
-            eye.as_ptr(),
-            stand.as_ptr(),
-            daily.as_ptr(),
-            e.standing,
-            e.day.active_seconds_by_minute.as_ptr(),
-            e.day.standing_seconds_by_minute.as_ptr(),
-            e.day.eye_break_minutes.as_ptr(),
-            e.day.eye_break_minutes.len(),
-            e.day.eye_reset_minutes.as_ptr(),
-            e.day.eye_reset_minutes.len(),
-            (Local::now().time().num_seconds_from_midnight() / 60) as u16,
+struct Presentation {
+    active: bool,
+    reminder: u8,
+    sound: u32,
+    eye: CString,
+    stand: CString,
+    daily: CString,
+    standing: bool,
+    active_minutes: Vec<u8>,
+    standing_minutes: Vec<u8>,
+    eye_break_minutes: Vec<u16>,
+    eye_reset_minutes: Vec<u16>,
+    current_minute: u16,
+}
+
+impl Presentation {
+    fn capture(e: &Engine, reminder: u8) -> Self {
+        let eye = if let Some(start) = e.eye_break_start {
+            format!(
+                "Look away: {}s left",
+                20_u64.saturating_sub(start.elapsed().as_secs())
+            )
+        } else if e.eye_due {
+            "Eye break in 0:00".to_owned()
+        } else if let Some(until) = e.eye_snoozed_until {
+            format!("Eye break in {}", countdown(seconds_until(until)))
+        } else {
+            let left = (e.config.eye_minutes as u64 * 60).saturating_sub(e.eye_active_seconds);
+            format!("Eye break in {}", countdown(left))
+        };
+        let stand = if e.standing {
+            format!("Standing: {} min", e.standing_seconds / 60)
+        } else if e.stand_due {
+            "Stand in 0:00".to_owned()
+        } else if let Some(until) = e.stand_snoozed_until {
+            format!("Stand in {}", countdown(seconds_until(until)))
+        } else {
+            let left = (e.config.stand_minutes as u64 * 60).saturating_sub(e.stand_active_seconds);
+            format!("Stand in {}", countdown(left))
+        };
+        let daily = format!(
+            "Standing today: {} / {} min",
+            e.day.standing_seconds / 60,
+            e.config.daily_stand_minutes
         );
+        Self {
+            active: e.active,
+            reminder,
+            sound: e.config.reminder_sound as u32,
+            eye: CString::new(eye).unwrap(),
+            stand: CString::new(stand).unwrap(),
+            daily: CString::new(daily).unwrap(),
+            standing: e.standing,
+            active_minutes: e.day.active_seconds_by_minute.clone(),
+            standing_minutes: e.day.standing_seconds_by_minute.clone(),
+            eye_break_minutes: e.day.eye_break_minutes.clone(),
+            eye_reset_minutes: e.day.eye_reset_minutes.clone(),
+            current_minute: (Local::now().time().num_seconds_from_midnight() / 60) as u16,
+        }
+    }
+
+    fn present(&self) {
+        unsafe {
+            bc_present(
+                self.active,
+                self.reminder,
+                self.sound,
+                self.eye.as_ptr(),
+                self.stand.as_ptr(),
+                self.daily.as_ptr(),
+                self.standing,
+                self.active_minutes.as_ptr(),
+                self.standing_minutes.as_ptr(),
+                self.eye_break_minutes.as_ptr(),
+                self.eye_break_minutes.len(),
+                self.eye_reset_minutes.as_ptr(),
+                self.eye_reset_minutes.len(),
+                self.current_minute,
+            );
+        }
     }
 }
 
@@ -644,16 +675,22 @@ fn credited_whole_seconds(gap: Duration, remainder: &mut Duration) -> u64 {
 
 #[no_mangle]
 extern "C" fn bc_tick(idle_seconds: f64, screen_ready: bool, media_assertion: bool) {
-    let mut e = engine().lock().unwrap();
-    let reminder = e.tick(idle_seconds, screen_ready, media_assertion);
-    present(&e, reminder);
+    let presentation = {
+        let mut e = engine().lock().unwrap();
+        let reminder = e.tick(idle_seconds, screen_ready, media_assertion);
+        Presentation::capture(&e, reminder)
+    };
+    presentation.present();
 }
 
 #[no_mangle]
 extern "C" fn bc_action(action: c_int) {
-    let mut e = engine().lock().unwrap();
-    e.action(action);
-    present(&e, 0);
+    let presentation = {
+        let mut e = engine().lock().unwrap();
+        e.action(action);
+        Presentation::capture(&e, 0)
+    };
+    presentation.present();
 }
 
 #[no_mangle]
@@ -663,17 +700,20 @@ extern "C" fn bc_config() -> BCConfig {
 
 #[no_mangle]
 extern "C" fn bc_apply_config(config: BCConfig) {
-    let mut e = engine().lock().unwrap();
-    e.config = Config {
-        eye_minutes: config.eye_minutes.clamp(1, 240),
-        stand_minutes: config.stand_minutes.clamp(1, 240),
-        daily_stand_minutes: config.daily_stand_minutes.clamp(1, 480),
-        snooze_minutes: config.snooze_minutes.clamp(1, 60),
-        idle_seconds: config.idle_seconds.clamp(15, 900),
-        reminder_sound: ReminderSound::from_index(config.sound),
+    let presentation = {
+        let mut e = engine().lock().unwrap();
+        e.config = Config {
+            eye_minutes: config.eye_minutes.clamp(1, 240),
+            stand_minutes: config.stand_minutes.clamp(1, 240),
+            daily_stand_minutes: config.daily_stand_minutes.clamp(1, 480),
+            snooze_minutes: config.snooze_minutes.clamp(1, 60),
+            idle_seconds: config.idle_seconds.clamp(15, 900),
+            reminder_sound: ReminderSound::from_index(config.sound),
+        };
+        save_settings(&e.settings_path, &e.config);
+        Presentation::capture(&e, 0)
     };
-    save_settings(&e.settings_path, &e.config);
-    present(&e, 0);
+    presentation.present();
 }
 
 #[no_mangle]
@@ -724,10 +764,13 @@ unsafe extern "C" fn bc_use_settings_file(path: *const c_char) -> bool {
             return false;
         }
     }
-    let mut e = engine().lock().unwrap();
-    e.config = config;
-    e.settings_path = path;
-    present(&e, 0);
+    let presentation = {
+        let mut e = engine().lock().unwrap();
+        e.config = config;
+        e.settings_path = path;
+        Presentation::capture(&e, 0)
+    };
+    presentation.present();
     true
 }
 

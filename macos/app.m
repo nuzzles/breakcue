@@ -49,6 +49,7 @@ extern void bc_shutdown(void);
 @property (assign) BOOL menuOpen;
 @property (assign) BOOL menuPositioned;
 @property (assign) BOOL openingReminder;
+@property (assign) BOOL reminderQueued;
 @property (assign) BOOL quitting;
 @property (assign) BOOL terminationQueued;
 @property (assign) NSPoint reminderLocation;
@@ -430,13 +431,20 @@ static BOOL mediaKeepsDisplayAwake(void) {
     self.standStopButton.hidden = !standing;
     self.standSnoozeButton.enabled = self.standDue;
     self.standDismissButton.enabled = self.standDue;
-    if (reminder != 0) {
-        if (!self.menuOpen) {
+    if (reminder != 0 && !self.menuOpen && !self.reminderQueued) {
+        // Opening an NSMenu runs a nested AppKit event loop. Let the current
+        // timer callback return before entering it so it cannot retain Rust's
+        // state lock or the current event while the menu owns keyboard input.
+        self.reminderQueued = YES;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self.reminderQueued = NO;
+            BOOL stillDue = reminder == 1 ? self.eyeDue : self.standDue;
+            if (self.quitting || self.menuOpen || !stillDue) return;
             [self playSoundAtIndex:sound];
             self.openingReminder = YES;
             self.reminderLocation = NSEvent.mouseLocation;
             [self.statusItem.button performClick:nil];
-        }
+        });
     }
 }
 
