@@ -259,11 +259,11 @@ impl Engine {
                 elapsed,
             );
         }
-        if self.active && !self.standing && !break_was_in_progress {
+        if self.active && !break_was_in_progress {
             if self.eye_break_start.is_none() && !self.eye_due {
                 self.eye_active_seconds += elapsed;
             }
-            if !self.stand_due {
+            if !self.standing && !self.stand_due {
                 self.stand_active_seconds += elapsed;
             }
         }
@@ -899,6 +899,26 @@ mod tests {
         let before = e.day.standing_seconds;
         e.tick(600.0, false, false);
         assert_eq!(e.day.standing_seconds - before, 10);
+    }
+
+    #[test]
+    fn active_screen_use_still_counts_toward_eye_break_while_standing() {
+        let mut e = Engine::load();
+        e.config.eye_minutes = 20;
+        e.standing = true;
+        e.last_tick = Instant::now() - Duration::from_secs(5);
+        e.tick(0.0, true, false);
+        assert_eq!(e.eye_active_seconds, 5);
+        assert_eq!(e.stand_active_seconds, 0);
+        assert_eq!(
+            Presentation::capture(&e, 0).eye.to_str().unwrap(),
+            "Eye break in 19:55"
+        );
+
+        e.last_tick = Instant::now() - Duration::from_secs(5);
+        e.tick(1_000.0, true, false);
+        assert_eq!(e.eye_active_seconds, 5);
+        assert_eq!(e.stand_active_seconds, 0);
     }
 
     #[test]
