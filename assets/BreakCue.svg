@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#203b52"/>
+      <stop offset="1" stop-color="#101d32"/>
+    </linearGradient>
+    <radialGradient id="glow">
+      <stop offset="0" stop-color="#48cbbd" stop-opacity=".24"/>
+      <stop offset="1" stop-color="#48cbbd" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="iris" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffe1a2"/>
+      <stop offset="1" stop-color="#f6a66e"/>
+    </linearGradient>
+  </defs>
+  <rect x="58" y="58" width="908" height="908" rx="226" fill="url(#background)"/>
+  <circle cx="512" cy="512" r="380" fill="url(#glow)"/>
+  <path d="M172 512 C296 333 411 283 512 283 C613 283 728 333 852 512"
+        fill="none" stroke="#edf7ee" stroke-width="55" stroke-linecap="round"/>
+  <path d="M172 512 C296 691 411 741 512 741 C613 741 728 691 852 512"
+        fill="none" stroke="#73d8c4" stroke-width="55" stroke-linecap="round"/>
+  <circle cx="512" cy="512" r="158" fill="#18374b" stroke="#edf7ee" stroke-width="17"/>
+  <circle cx="512" cy="512" r="112" fill="url(#iris)"/>
+  <path d="M435 545 C486 571 539 570 589 542" fill="none"
+        stroke="#aa573f" stroke-width="18" stroke-linecap="round"/>
+  <circle cx="469" cy="460" r="24" fill="#fff7dc" opacity=".9"/>
+</svg>

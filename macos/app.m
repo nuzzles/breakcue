@@ -43,9 +43,6 @@ extern void bc_shutdown(void);
 @property (weak) BCAppDelegate *appDelegate;
 @end
 
-@interface BCCaretView : NSView
-@end
-
 @interface BCAppDelegate : NSObject <NSApplicationDelegate, NSMenuDelegate>
 @property (strong) NSStatusItem *statusItem;
 @property (strong) NSMenu *menu;
@@ -56,7 +53,6 @@ extern void bc_shutdown(void);
 @property (assign) BOOL terminationQueued;
 @property (assign) NSPoint reminderLocation;
 @property (strong) NSView *menuContent;
-@property (strong) NSPanel *caretWindow;
 @property (strong) NSWindow *settingsWindow;
 @property (strong) NSTextField *trackingLabel;
 @property (strong) NSImageView *trackingIcon;
@@ -94,32 +90,6 @@ static BCAppDelegate *delegate;
 - (void)viewWillDraw {
     [super viewWillDraw];
     [self.appDelegate centerMenuBelowStatusItem];
-}
-
-@end
-
-@implementation BCCaretView
-
-- (void)drawRect:(NSRect)dirtyRect {
-    (void)dirtyRect;
-    NSBezierPath *caret = [NSBezierPath bezierPath];
-    [caret moveToPoint:NSMakePoint(0, 0)];
-    [caret lineToPoint:NSMakePoint(NSMidX(self.bounds), NSMaxY(self.bounds))];
-    [caret lineToPoint:NSMakePoint(NSMaxX(self.bounds), 0)];
-    [caret closePath];
-    BOOL dark = [[self.effectiveAppearance bestMatchFromAppearancesWithNames:@[NSAppearanceNameDarkAqua, NSAppearanceNameAqua]]
-        isEqualToString:NSAppearanceNameDarkAqua];
-    NSColor *background = dark ? [NSColor colorWithWhite:0.11 alpha:1] : NSColor.windowBackgroundColor;
-    [background setFill];
-    [caret fill];
-    NSBezierPath *outline = [NSBezierPath bezierPath];
-    [outline moveToPoint:NSMakePoint(0.5, 0)];
-    [outline lineToPoint:NSMakePoint(NSMidX(self.bounds), NSMaxY(self.bounds) - 0.5)];
-    [outline lineToPoint:NSMakePoint(NSMaxX(self.bounds) - 0.5, 0)];
-    outline.lineWidth = 1.25;
-    NSColor *border = dark ? [NSColor colorWithWhite:0.47 alpha:1] : [NSColor colorWithWhite:0.68 alpha:1];
-    [border setStroke];
-    [outline stroke];
 }
 
 @end
@@ -308,7 +278,6 @@ static BOOL mediaKeepsDisplayAwake(void) {
     self.menuOpen = NO;
     self.menuPositioned = NO;
     self.openingReminder = NO;
-    [self.caretWindow orderOut:nil];
 }
 
 - (void)centerMenuBelowStatusItem {
@@ -350,27 +319,12 @@ static BOOL mediaKeepsDisplayAwake(void) {
     frame.origin.x = left;
     // A programmatic click can open the menu while macOS has auto-hidden the
     // menu bar, reporting the button at the display's top edge. Reserve its
-    // usual height so the caret and the menu header remain on screen.
+    // usual height so the popup remains on screen.
     CGFloat menuBarBottom = NSMaxY(screen) - NSStatusBar.systemStatusBar.thickness;
-    CGFloat bottom = MIN(anchorBottom, menuBarBottom) - NSHeight(frame) - 7;
+    CGFloat bottom = MIN(anchorBottom, menuBarBottom) - NSHeight(frame) - 2;
     frame.origin.y = MAX(NSMinY(screen) + 8, MIN(bottom, NSMaxY(screen) - NSHeight(frame) - 8));
     self.menuPositioned = YES;
     [menuWindow setFrameOrigin:frame.origin];
-    CGFloat pointerX = NSMidX(frame) - 11;
-    if (!self.caretWindow) {
-        self.caretWindow = [[NSPanel alloc] initWithContentRect:NSMakeRect(pointerX, NSMaxY(frame) - 1, 22, 11)
-                                                     styleMask:NSWindowStyleMaskBorderless | NSWindowStyleMaskNonactivatingPanel
-                                                       backing:NSBackingStoreBuffered defer:NO];
-        self.caretWindow.opaque = NO;
-        self.caretWindow.backgroundColor = NSColor.clearColor;
-        self.caretWindow.hasShadow = NO;
-        self.caretWindow.ignoresMouseEvents = YES;
-        self.caretWindow.level = NSPopUpMenuWindowLevel + 1;
-        self.caretWindow.collectionBehavior = NSWindowCollectionBehaviorCanJoinAllSpaces | NSWindowCollectionBehaviorFullScreenAuxiliary;
-        self.caretWindow.contentView = [[BCCaretView alloc] initWithFrame:NSMakeRect(0, 0, 22, 11)];
-    }
-    [self.caretWindow setFrameOrigin:NSMakePoint(pointerX, NSMaxY(frame) - 1)];
-    [self.caretWindow orderFrontRegardless];
 }
 
 - (void)makeMenu {
